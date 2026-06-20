@@ -1,0 +1,24 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
+  --heading: system-ui, 'Segoe UI', Roboto, sans-serif;
+  --mono: ui-monospace, Consolas, monospace;
+}
+
+* {
+  @apply box-border;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  font-family: var(--sans);
+}
+
+html, body, #root {
+  height: 100%;
+}
+
