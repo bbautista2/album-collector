@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { Album, UserAlbum, UserSticker } from '../types'
+import type { Album, AlbumCreationInput, UserAlbum, UserSticker } from '../types'
 import { supabase } from '../lib/supabase'
 
 interface CollectorStore {
@@ -14,6 +14,7 @@ interface CollectorStore {
   fetchUserStickers: (userId: string) => Promise<void>
   activateAlbum: (userId: string, albumId: string) => Promise<void>
   deactivateAlbum: (userId: string, albumId: string) => Promise<void>
+  createAlbum: (userId: string, album: AlbumCreationInput) => Promise<string | null>
   updateStickerQuantity: (
     userId: string,
     stickerId: string,
@@ -32,7 +33,10 @@ export const useCollectorStore = create<CollectorStore>((set) => ({
   fetchAlbums: async () => {
     set({ isLoading: true, error: null })
     try {
-      const { data, error } = await supabase.from('albums').select('*')
+      const { data, error } = await supabase
+        .from('albums')
+        .select('*')
+        .order('created_at', { ascending: false })
       if (error) throw error
       set({ albums: data || [] })
     } catch (err) {
@@ -121,6 +125,49 @@ export const useCollectorStore = create<CollectorStore>((set) => ({
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to deactivate album'
       set({ error: errorMessage })
+    } finally {
+      set({ isLoading: false })
+    }
+  },
+
+  createAlbum: async (userId, album) => {
+    set({ isLoading: true, error: null })
+    try {
+      const { data: createdAlbum, error: albumError } = await supabase
+        .from('albums')
+        .insert({
+          title: album.title,
+          description: album.description || null,
+          image_url: album.image_url || null,
+          total_stickers: album.stickers.length,
+          created_by: userId,
+        })
+        .select('*')
+        .single()
+
+      if (albumError) throw albumError
+
+      const stickerRows = album.stickers.map((sticker) => ({
+        album_id: createdAlbum.id,
+        sticker_number: sticker.sticker_number,
+        name: sticker.name,
+        category_or_team: sticker.category_or_team || null,
+      }))
+
+      if (stickerRows.length > 0) {
+        const { error: stickersError } = await supabase.from('stickers').insert(stickerRows)
+        if (stickersError) throw stickersError
+      }
+
+      set((state) => ({
+        albums: [createdAlbum, ...state.albums],
+      }))
+
+      return createdAlbum.id
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Failed to create album'
+      set({ error: errorMessage })
+      return null
     } finally {
       set({ isLoading: false })
     }

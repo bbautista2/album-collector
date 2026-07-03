@@ -6,8 +6,7 @@ import { useCollectorStore } from '../stores/collectorStore'
 export function DashboardPage() {
   const { user } = useAuthStore()
   const navigate = useNavigate()
-  const { albums, userAlbums, fetchAlbums, fetchUserAlbums, activateAlbum, isLoading } =
-    useCollectorStore()
+  const { albums, userAlbums, fetchAlbums, fetchUserAlbums, activateAlbum, isLoading } = useCollectorStore()
 
   useEffect(() => {
     if (!user) {
@@ -23,9 +22,18 @@ export function DashboardPage() {
 
   return (
     <div className="space-y-8">
-      <div>
-        <h1 className="text-3xl font-bold text-gray-900 mb-2">Mi Dashboard</h1>
-        <p className="text-gray-600">Bienvenido, {user?.email}</p>
+      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+        <div>
+          <h1 className="text-3xl font-bold text-gray-900 mb-2">Mi Dashboard</h1>
+          <p className="text-gray-600">Bienvenido, {user?.email}</p>
+        </div>
+
+        <button
+          onClick={() => navigate('/albums/new')}
+          className="inline-flex items-center justify-center rounded-lg bg-primary-600 px-5 py-3 font-semibold text-white transition hover:bg-primary-700"
+        >
+          + Crear nuevo álbum
+        </button>
       </div>
 
       <div>
@@ -60,15 +68,30 @@ export function DashboardPage() {
                       <span className="text-xs text-gray-500">
                         {album.total_stickers} figuras
                       </span>
-                      <span
-                        className={`text-xs px-2 py-1 rounded-full ${
-                          isActivated
-                            ? 'bg-green-100 text-green-800'
-                            : 'bg-gray-100 text-gray-800'
-                        }`}
-                      >
-                        {isActivated ? '✓ Activado' : 'No activado'}
-                      </span>
+                      <div className="flex items-center gap-2">
+                        <span
+                          className={`text-xs px-2 py-1 rounded-full ${
+                            album.created_by
+                              ? 'bg-blue-100 text-blue-800'
+                              : 'bg-purple-100 text-purple-800'
+                          }`}
+                        >
+                          {album.created_by === user?.id
+                            ? 'Tu álbum'
+                            : album.created_by
+                              ? 'Comunidad'
+                              : 'Oficial'}
+                        </span>
+                        <span
+                          className={`text-xs px-2 py-1 rounded-full ${
+                            isActivated
+                              ? 'bg-green-100 text-green-800'
+                              : 'bg-gray-100 text-gray-800'
+                          }`}
+                        >
+                          {isActivated ? '✓ Activado' : 'No activado'}
+                        </span>
+                      </div>
                     </div>
 
                     {isActivated ? (

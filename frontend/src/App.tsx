@@ -8,6 +8,7 @@ import { DashboardPage } from './pages/DashboardPage'
 import { ProfilePage } from './pages/ProfilePage'
 import { AlbumPage } from './pages/AlbumPage'
 import { GroupsPage } from './pages/GroupsPage'
+import { CreateAlbumPage } from './pages/CreateAlbumPage'
 import { useAuthStore } from './stores/authStore'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -67,6 +68,15 @@ function App() {
           element={
             <ProtectedRoute>
               <AlbumPage />
+            </ProtectedRoute>
+          }
+        />
+
+        <Route
+          path="/albums/new"
+          element={
+            <ProtectedRoute>
+              <CreateAlbumPage />
             </ProtectedRoute>
           }
         />

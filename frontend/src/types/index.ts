@@ -18,6 +18,7 @@ export interface Album {
   description: string | null;
   total_stickers: number;
   image_url: string | null;
+  created_by: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -31,6 +32,19 @@ export interface Sticker {
   category_or_team: string | null;
   image_url: string | null;
   created_at: string;
+}
+
+export interface StickerDraft {
+  sticker_number: number;
+  name: string;
+  category_or_team?: string | null;
+}
+
+export interface AlbumCreationInput {
+  title: string;
+  description: string;
+  image_url: string;
+  stickers: StickerDraft[];
 }
 
 // User Sticker Types
@@ -83,4 +97,15 @@ export interface AuthSession {
   user: AuthUser | null;
   access_token: string | null;
   refresh_token: string | null;
+}
+
+export interface DetectedStickerNumber {
+  stickerNumber: number;
+  count: number;
+}
+
+export interface ScanRepeatedResponse {
+  detectedNumbers: DetectedStickerNumber[];
+  rawText?: string;
+  model?: string;
 }
