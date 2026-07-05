@@ -95,12 +95,22 @@ export function DashboardPage() {
                     </div>
 
                     {isActivated ? (
-                      <button
-                        onClick={() => navigate(`/album/${album.id}`)}
-                        className="w-full bg-primary-600 text-white py-2 rounded-lg font-semibold hover:bg-primary-700 transition"
-                      >
-                        Ver Mi Colección
-                      </button>
+                      <div className="space-y-2">
+                        <button
+                          onClick={() => navigate(`/album/${album.id}`)}
+                          className="w-full bg-primary-600 text-white py-2 rounded-lg font-semibold hover:bg-primary-700 transition"
+                        >
+                          Ver Mi Colección
+                        </button>
+                        {album.created_by && album.created_by !== user?.id && (
+                          <button
+                            onClick={() => navigate(`/profile/${album.created_by}`)}
+                            className="w-full bg-white border border-primary-300 text-primary-700 py-2 rounded-lg font-semibold hover:bg-primary-50 transition"
+                          >
+                            Ver perfil del creador
+                          </button>
+                        )}
+                      </div>
                     ) : (
                       <button
                         onClick={() => activateAlbum(user!.id, album.id)}
