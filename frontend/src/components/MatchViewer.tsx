@@ -18,23 +18,63 @@ interface MatchmakingResult {
   stickers_for_b: MatchSticker[]
 }
 
-function StickerList({ items }: { items: MatchSticker[] }) {
+interface StickerListProps {
+  title: string
+  items: MatchSticker[]
+  saveLabel: string
+  onSave: (sticker: MatchSticker) => Promise<void>
+  savedStickerIds: Set<string>
+  isSaving: boolean
+}
+
+function StickerList({
+  title,
+  items,
+  saveLabel,
+  onSave,
+  savedStickerIds,
+  isSaving,
+}: StickerListProps) {
   if (items.length === 0) {
-    return <p className="text-sm text-gray-500">Sin coincidencias por ahora.</p>
+    return (
+      <div className="rounded-lg border border-gray-200 p-4">
+        <h4 className="mb-3 text-sm font-semibold text-gray-700">{title}</h4>
+        <p className="text-sm text-gray-500">Sin coincidencias por ahora.</p>
+      </div>
+    )
   }
 
   return (
-    <ul className="space-y-2">
-      {items.map((sticker) => (
-        <li
-          key={sticker.id}
-          className="flex items-center justify-between rounded-lg border border-gray-200 bg-gray-50 px-3 py-2"
-        >
-          <span className="font-semibold text-primary-700">#{sticker.number}</span>
-          <span className="ml-3 flex-1 truncate text-sm text-gray-700">{sticker.name}</span>
-        </li>
-      ))}
-    </ul>
+    <div className="rounded-lg border border-gray-200 p-4">
+      <h4 className="mb-3 text-sm font-semibold text-gray-700">{title}</h4>
+      <ul className="space-y-2">
+        {items.map((sticker) => {
+          const isSaved = savedStickerIds.has(sticker.id)
+
+          return (
+            <li
+              key={sticker.id}
+              className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-semibold text-primary-700">#{sticker.number}</span>
+                <span className="ml-3 flex-1 truncate text-sm text-gray-700">{sticker.name}</span>
+              </div>
+
+              <div className="mt-2 flex justify-end">
+                <button
+                  onClick={() => onSave(sticker)}
+                  disabled={isSaved || isSaving}
+                  className="rounded-md border border-primary-300 px-3 py-1 text-xs font-semibold text-primary-700 hover:bg-primary-50 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {isSaved ? 'Pendiente guardado' : saveLabel}
+                </button>
+              </div>
+            </li>
+          )
+        })}
+      </ul>
+    </div>
   )
 }
 
@@ -42,10 +82,51 @@ export function MatchViewer({ albumId, profileId }: MatchViewerProps) {
   const { user } = useAuthStore()
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [saveError, setSaveError] = useState<string | null>(null)
+  const [isSaving, setIsSaving] = useState(false)
+  const [savedStickerIds, setSavedStickerIds] = useState<Set<string>>(new Set())
   const [result, setResult] = useState<MatchmakingResult>({
     stickers_for_a: [],
     stickers_for_b: [],
   })
+
+  const saveCommitment = async (sticker: MatchSticker, direction: 'incoming' | 'outgoing') => {
+    if (!user?.id) {
+      return
+    }
+
+    setIsSaving(true)
+    setSaveError(null)
+
+    try {
+      const { error: insertError } = await supabase.from('exchange_commitments').insert({
+        created_by: user.id,
+        counterparty_id: profileId,
+        album_id: albumId,
+        sticker_id: sticker.id,
+        direction,
+        status: 'pending',
+      })
+
+      if (insertError) {
+        throw insertError
+      }
+
+      setSavedStickerIds((previous) => {
+        const next = new Set(previous)
+        next.add(sticker.id)
+        return next
+      })
+    } catch (saveCommitmentError) {
+      setSaveError(
+        saveCommitmentError instanceof Error
+          ? saveCommitmentError.message
+          : 'No se pudo guardar el intercambio pendiente'
+      )
+    } finally {
+      setIsSaving(false)
+    }
+  }
 
   useEffect(() => {
     let isMounted = true
@@ -133,16 +214,30 @@ export function MatchViewer({ albumId, profileId }: MatchViewerProps) {
         </div>
       )}
 
-      <div className="grid gap-4 md:grid-cols-2">
-        <div className="rounded-lg border border-gray-200 p-4">
-          <h4 className="mb-3 text-sm font-semibold text-gray-700">Figuritas que te puede dar</h4>
-          <StickerList items={result.stickers_for_a} />
+      {saveError && (
+        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          {saveError}
         </div>
+      )}
 
-        <div className="rounded-lg border border-gray-200 p-4">
-          <h4 className="mb-3 text-sm font-semibold text-gray-700">Figuritas que le puedes dar</h4>
-          <StickerList items={result.stickers_for_b} />
-        </div>
+      <div className="grid gap-4 md:grid-cols-2">
+        <StickerList
+          title="Figuritas que te puede dar"
+          items={result.stickers_for_a}
+          saveLabel="Guardar pendiente (me la dan)"
+          onSave={(sticker) => saveCommitment(sticker, 'incoming')}
+          savedStickerIds={savedStickerIds}
+          isSaving={isSaving}
+        />
+
+        <StickerList
+          title="Figuritas que le puedes dar"
+          items={result.stickers_for_b}
+          saveLabel="Guardar pendiente (yo la doy)"
+          onSave={(sticker) => saveCommitment(sticker, 'outgoing')}
+          savedStickerIds={savedStickerIds}
+          isSaving={isSaving}
+        />
       </div>
     </section>
   )

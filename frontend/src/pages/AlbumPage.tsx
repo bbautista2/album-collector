@@ -3,7 +3,9 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { useAuthStore } from '../stores/authStore'
 import { supabase } from '../lib/supabase'
 import { scanRepeatedStickers } from '../lib/repeatedScanner'
-import type { Album, DetectedStickerNumber, Sticker, UserSticker } from '../types'
+import type { Album, DetectedStickerNumber, ExchangeCommitment, Sticker, UserSticker } from '../types'
+
+type ScanMode = 'repeated' | 'missing'
 
 export function AlbumPage() {
   const { albumId } = useParams()
@@ -14,9 +16,12 @@ export function AlbumPage() {
   const [userStickers, setUserStickers] = useState<Map<string, UserSticker>>(new Map())
   const [isLoading, setIsLoading] = useState(true)
   const [scanFile, setScanFile] = useState<File | null>(null)
+  const [scanMode, setScanMode] = useState<ScanMode>('repeated')
   const [scanLoading, setScanLoading] = useState(false)
   const [scanError, setScanError] = useState<string | null>(null)
   const [scanResults, setScanResults] = useState<DetectedStickerNumber[]>([])
+  const [pendingCommitments, setPendingCommitments] = useState<ExchangeCommitment[]>([])
+  const [commitmentActionLoadingId, setCommitmentActionLoadingId] = useState<string | null>(null)
 
   useEffect(() => {
     if (!user || !albumId) {
@@ -60,6 +65,19 @@ export function AlbumPage() {
             map.set(us.sticker_id, us)
           })
           setUserStickers(map)
+        }
+
+        const { data: commitmentsData } = await supabase
+          .from('exchange_commitments')
+          .select('*')
+          .eq('created_by', user.id)
+          .eq('album_id', albumId)
+          .eq('direction', 'incoming')
+          .eq('status', 'pending')
+          .order('created_at', { ascending: false })
+
+        if (commitmentsData) {
+          setPendingCommitments(commitmentsData)
         }
       } catch (error) {
         console.error('Error fetching data:', error)
@@ -157,6 +175,18 @@ export function AlbumPage() {
           }
 
           const existing = userStickers.get(matchingSticker.id)
+
+          if (scanMode === 'missing') {
+            const nextOwned = Math.max(existing?.quantity_owned || 0, 0) + item.count
+
+            return {
+              user_id: user.id,
+              sticker_id: matchingSticker.id,
+              quantity_owned: nextOwned,
+              quantity_repeated: Math.min(existing?.quantity_repeated || 0, nextOwned),
+            }
+          }
+
           const nextRepeated = (existing?.quantity_repeated || 0) + item.count
           const nextOwned = Math.max((existing?.quantity_owned || 0) + item.count, nextRepeated + 1)
 
@@ -198,6 +228,61 @@ export function AlbumPage() {
     }
   }
 
+  const handleCompleteCommitment = async (commitment: ExchangeCommitment) => {
+    if (!user) {
+      return
+    }
+
+    setCommitmentActionLoadingId(commitment.id)
+    try {
+      const existing = userStickers.get(commitment.sticker_id)
+      const nextOwned = (existing?.quantity_owned || 0) + 1
+      const nextRepeated = Math.min(existing?.quantity_repeated || 0, nextOwned)
+
+      const { error: stickerError } = await supabase.from('user_stickers').upsert(
+        {
+          user_id: user.id,
+          sticker_id: commitment.sticker_id,
+          quantity_owned: nextOwned,
+          quantity_repeated: nextRepeated,
+        },
+        { onConflict: 'user_id,sticker_id' }
+      )
+
+      if (stickerError) {
+        throw stickerError
+      }
+
+      const { error: commitmentError } = await supabase
+        .from('exchange_commitments')
+        .update({
+          status: 'completed',
+          completed_at: new Date().toISOString(),
+        })
+        .eq('id', commitment.id)
+
+      if (commitmentError) {
+        throw commitmentError
+      }
+
+      const updated = new Map(userStickers)
+      updated.set(commitment.sticker_id, {
+        id: existing?.id || '',
+        user_id: user.id,
+        sticker_id: commitment.sticker_id,
+        quantity_owned: nextOwned,
+        quantity_repeated: nextRepeated,
+        updated_at: new Date().toISOString(),
+      })
+      setUserStickers(updated)
+      setPendingCommitments((previous) => previous.filter((item) => item.id !== commitment.id))
+    } catch (error) {
+      setScanError(error instanceof Error ? error.message : 'No se pudo completar el intercambio')
+    } finally {
+      setCommitmentActionLoadingId(null)
+    }
+  }
+
   const ownedCount = Array.from(userStickers.values()).filter((us) => us.quantity_owned > 0)
     .length
   const totalCount = stickers.length
@@ -227,9 +312,9 @@ export function AlbumPage() {
       <div className="rounded-lg border border-orange-200 bg-white p-5 shadow-sm">
         <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
           <div className="space-y-2">
-            <h2 className="text-xl font-semibold text-gray-900">Escaneo de repetidas con IA</h2>
+            <h2 className="text-xl font-semibold text-gray-900">Escaneo de grilla con IA</h2>
             <p className="text-sm text-gray-600">
-              Sube una foto de tus repetidas y Gemini intentará detectar los números para cargarlos al inventario.
+              Puedes escanear repetidas o figuritas faltantes que acabas de conseguir para actualizar tu inventario automáticamente.
             </p>
           </div>
 
@@ -250,6 +335,29 @@ export function AlbumPage() {
           </div>
         </div>
 
+        <div className="mt-4 flex gap-2">
+          <button
+            onClick={() => setScanMode('repeated')}
+            className={`rounded-full px-3 py-1 text-xs font-semibold ${
+              scanMode === 'repeated'
+                ? 'bg-orange-500 text-white'
+                : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+            }`}
+          >
+            Escanear repetidas
+          </button>
+          <button
+            onClick={() => setScanMode('missing')}
+            className={`rounded-full px-3 py-1 text-xs font-semibold ${
+              scanMode === 'missing'
+                ? 'bg-emerald-600 text-white'
+                : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+            }`}
+          >
+            Escanear faltantes conseguidas
+          </button>
+        </div>
+
         {scanError && (
           <div className="mt-4 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
             {scanError}
@@ -258,7 +366,46 @@ export function AlbumPage() {
 
         {scanResults.length > 0 && (
           <div className="mt-4 rounded-md bg-orange-50 px-4 py-3 text-sm text-orange-900">
-            Detectadas: {scanResults.map((item) => `#${item.stickerNumber} × ${item.count}`).join(', ')}
+            {scanMode === 'repeated' ? 'Repetidas detectadas' : 'Faltantes conseguidas detectadas'}:{' '}
+            {scanResults.map((item) => `#${item.stickerNumber} × ${item.count}`).join(', ')}
+          </div>
+        )}
+      </div>
+
+      <div className="rounded-lg border border-emerald-200 bg-white p-5 shadow-sm">
+        <h2 className="text-xl font-semibold text-gray-900">Intercambios pendientes por confirmar</h2>
+        <p className="mt-1 text-sm text-gray-600">
+          Cuando completes un intercambio, márcalo aquí y la figurita quedará registrada como obtenida automáticamente.
+        </p>
+
+        {pendingCommitments.length === 0 ? (
+          <p className="mt-4 text-sm text-gray-500">No tienes intercambios pendientes en este álbum.</p>
+        ) : (
+          <div className="mt-4 space-y-2">
+            {pendingCommitments.map((commitment) => {
+              const sticker = stickers.find((item) => item.id === commitment.sticker_id)
+              return (
+                <div
+                  key={commitment.id}
+                  className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-gray-200 px-3 py-2"
+                >
+                  <div>
+                    <p className="text-sm font-semibold text-gray-800">
+                      {sticker ? `#${sticker.sticker_number} · ${sticker.name}` : commitment.sticker_id}
+                    </p>
+                    <p className="text-xs text-gray-500">Pendiente desde {new Date(commitment.created_at).toLocaleDateString()}</p>
+                  </div>
+
+                  <button
+                    onClick={() => handleCompleteCommitment(commitment)}
+                    disabled={commitmentActionLoadingId === commitment.id}
+                    className="rounded-md bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {commitmentActionLoadingId === commitment.id ? 'Completando...' : 'Marcar intercambio completado'}
+                  </button>
+                </div>
+              )
+            })}
           </div>
         )}
       </div>

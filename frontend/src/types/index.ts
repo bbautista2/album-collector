@@ -109,3 +109,16 @@ export interface ScanRepeatedResponse {
   rawText?: string;
   model?: string;
 }
+
+export interface ExchangeCommitment {
+  id: string;
+  created_by: string;
+  counterparty_id: string;
+  album_id: string;
+  sticker_id: string;
+  direction: 'incoming' | 'outgoing';
+  status: 'pending' | 'completed' | 'cancelled';
+  notes: string | null;
+  created_at: string;
+  completed_at: string | null;
+}
