@@ -136,6 +136,12 @@ export function ProfilePage() {
               >
                 Editar Perfil
               </button>
+              <button
+                onClick={() => navigate('/change-password')}
+                className="ml-2 bg-gray-100 text-gray-800 px-4 py-2 rounded-lg font-semibold hover:bg-gray-200 transition"
+              >
+                Cambiar contraseña
+              </button>
             </>
           ) : (
             <>

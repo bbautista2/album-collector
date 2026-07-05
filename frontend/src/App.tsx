@@ -10,6 +10,9 @@ import { AlbumPage } from './pages/AlbumPage'
 import { GroupsPage } from './pages/GroupsPage'
 import { CreateAlbumPage } from './pages/CreateAlbumPage'
 import { PublicProfilePage } from './pages/PublicProfilePage'
+import { ResetPasswordRequestPage } from './pages/ResetPasswordRequestPage'
+import { ChangePasswordPage } from './pages/ChangePasswordPage'
+import { ResetPasswordConfirmPage } from './pages/ResetPasswordConfirmPage'
 import { useAuthStore } from './stores/authStore'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -91,11 +94,23 @@ function App() {
           }
         />
 
+        <Route path="/reset-password" element={<Layout><ResetPasswordRequestPage /></Layout>} />
+        <Route path="/reset-password/confirm" element={<Layout><ResetPasswordConfirmPage /></Layout>} />
+
         <Route
           path="/grupos"
           element={
             <ProtectedRoute>
               <GroupsPage />
+            </ProtectedRoute>
+          }
+        />
+
+        <Route
+          path="/change-password"
+          element={
+            <ProtectedRoute>
+              <ChangePasswordPage />
             </ProtectedRoute>
           }
         />
