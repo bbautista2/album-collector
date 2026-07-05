@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Link } from 'react-router-dom'
 import { useNavigate } from 'react-router-dom'
 import { useAuthStore } from '../stores/authStore'
 
@@ -104,9 +105,9 @@ export function SignupPage() {
 
         <p className="text-center text-gray-600 text-sm mt-6">
           ¿Ya tienes cuenta?{' '}
-          <a href="/login" className="text-primary-600 hover:text-primary-700 font-semibold">
+          <Link to="/login" className="text-primary-600 hover:text-primary-700 font-semibold">
             Inicia sesión aquí
-          </a>
+          </Link>
         </p>
       </div>
     </div>
