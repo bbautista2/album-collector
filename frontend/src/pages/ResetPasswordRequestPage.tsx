@@ -13,7 +13,9 @@ export function ResetPasswordRequestPage() {
     setMessage(null)
 
     try {
-      const redirectTo = `${window.location.origin}/reset-password/confirm`
+      // Prefer an explicit public app URL set in env (useful for production)
+      const appBase = import.meta.env.VITE_APP_URL || window.location.origin
+      const redirectTo = `${appBase}/reset-password/confirm`
       const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo })
 
       if (error) throw error
