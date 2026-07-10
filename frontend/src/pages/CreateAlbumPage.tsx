@@ -3,8 +3,9 @@ import { useNavigate } from 'react-router-dom'
 import { useAuthStore } from '../stores/authStore'
 import { useCollectorStore } from '../stores/collectorStore'
 import type { StickerDraft } from '../types'
+ 
 
-type InputMode = 'range' | 'list'
+type InputMode = 'range' | 'list' | 'groups'
 
 function parseStickerList(rawValue: string): StickerDraft[] {
   return rawValue
@@ -26,6 +27,64 @@ function parseStickerList(rawValue: string): StickerDraft[] {
       }
     })
     .filter((item): item is StickerDraft => item !== null)
+}
+
+function parseGroupRanges(rawValue: string): StickerDraft[] {
+  // Accept lines or comma-separated tokens like:
+  // t1-20
+  // e1-40
+  // 41-60
+  // or combined: t1-20,e1-40,41-60
+  const tokens = rawValue
+    .split(/[,\n]/)
+    .map((t) => t.trim())
+    .filter(Boolean)
+
+  const drafts: StickerDraft[] = []
+  let seq = 1
+
+  for (const token of tokens) {
+    // match patterns like t1-20, t1-t20, 1-50, 5
+    const mRange = token.match(/^([A-Za-z]*)?(\d+)\s*-\s*([A-Za-z]*)?(\d+)$/)
+    const mSingle = token.match(/^([A-Za-z]*)(\d+)$/)
+
+    if (mRange) {
+      const prefixStart = mRange[1] || ''
+      const startNum = parseInt(mRange[2], 10)
+      const prefixEnd = mRange[3] || ''
+      const endNum = parseInt(mRange[4], 10)
+
+      // prefer explicit prefix if provided in either side
+      const prefix = prefixStart || prefixEnd || ''
+      const first = Math.min(startNum, endNum)
+      const last = Math.max(startNum, endNum)
+
+      for (let n = first; n <= last; n++) {
+        const label = prefix ? `${prefix}${n}` : `${n}`
+        drafts.push({ sticker_number: seq, name: label, category_or_team: null })
+        seq += 1
+      }
+      continue
+    }
+
+    if (mSingle) {
+      const prefix = mSingle[1] || ''
+      const num = parseInt(mSingle[2], 10)
+      const label = prefix ? `${prefix}${num}` : `${num}`
+      drafts.push({ sticker_number: seq, name: label, category_or_team: null })
+      seq += 1
+      continue
+    }
+
+    // fallback: try parse number only
+    const n = Number.parseInt(token.replace(/[^0-9]/g, ''), 10)
+    if (Number.isInteger(n)) {
+      drafts.push({ sticker_number: seq, name: `${n}`, category_or_team: null })
+      seq += 1
+    }
+  }
+
+  return drafts
 }
 
 function buildRangeStickers(start: number, end: number, prefix: string, category: string): StickerDraft[] {
@@ -58,12 +117,19 @@ export function CreateAlbumPage() {
   const [rangePrefix, setRangePrefix] = useState('Sticker')
   const [rangeCategory, setRangeCategory] = useState('')
   const [stickerListText, setStickerListText] = useState('1|Sticker 1|Equipo A\n2|Sticker 2|Equipo A')
+  const [groupListText, setGroupListText] = useState('t1-20\ne1-40\n61-100')
   const [formError, setFormError] = useState<string | null>(null)
+  
 
   const stickerDrafts = useMemo(() => {
-    const source = inputMode === 'range'
-      ? buildRangeStickers(rangeStart, rangeEnd, rangePrefix, rangeCategory)
-      : parseStickerList(stickerListText)
+    let source: StickerDraft[] = []
+    if (inputMode === 'range') {
+      source = buildRangeStickers(rangeStart, rangeEnd, rangePrefix, rangeCategory)
+    } else if (inputMode === 'list') {
+      source = parseStickerList(stickerListText)
+    } else {
+      source = parseGroupRanges(groupListText)
+    }
 
     const deduplicated = new Map<number, StickerDraft>()
     source.forEach((sticker) => {
@@ -71,7 +137,7 @@ export function CreateAlbumPage() {
     })
 
     return Array.from(deduplicated.values()).sort((first, second) => first.sticker_number - second.sticker_number)
-  }, [inputMode, rangeCategory, rangeEnd, rangePrefix, rangeStart, stickerListText])
+  }, [inputMode, rangeCategory, rangeEnd, rangePrefix, rangeStart, stickerListText, groupListText])
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -105,6 +171,7 @@ export function CreateAlbumPage() {
     }
 
     await activateAlbum(user.id, albumId)
+
     navigate(`/album/${albumId}`)
   }
 
@@ -231,7 +298,7 @@ export function CreateAlbumPage() {
                   />
                 </div>
               </div>
-            ) : (
+            ) : inputMode === 'list' ? (
               <div>
                 <label className="mb-1 block text-sm font-medium text-gray-700">Lista de figuritas</label>
                 <textarea
@@ -242,6 +309,20 @@ export function CreateAlbumPage() {
                 />
                 <p className="mt-2 text-xs text-gray-500">
                   Usa una línea por figurita: <code>numero|nombre|categoria</code>. El nombre y la categoría son opcionales.
+                </p>
+              </div>
+            ) : (
+              <div>
+                <label className="mb-1 block text-sm font-medium text-gray-700">Grupos / Prefijos</label>
+                <textarea
+                  value={groupListText}
+                  onChange={(event) => setGroupListText(event.target.value)}
+                  rows={6}
+                  className="w-full rounded-lg border border-gray-300 px-4 py-2 font-mono text-sm"
+                />
+                <p className="mt-2 text-xs text-gray-500">
+                  Define grupos por línea o separados por comas. Ejemplos: <code>t1-20</code>, <code>e1-40</code>, <code>61-100</code>.
+                  Los prefijos se mantendrán en el nombre (p.ej. <code>t1</code>), y las posiciones serán asignadas secuencialmente.
                 </p>
               </div>
             )}

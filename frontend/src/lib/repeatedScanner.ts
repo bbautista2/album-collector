@@ -1,13 +1,16 @@
 import type { DetectedStickerNumber, ScanRepeatedResponse } from '../types'
+import { supabase } from './supabase'
 
 interface ScanRepeatedInput {
   file: File
   albumTitle: string
   validStickerNumbers: number[]
+  albumId?: number | string
 }
 
 const geminiApiKey = import.meta.env.VITE_GEMINI_API_KEY
 const geminiModel = import.meta.env.VITE_GEMINI_MODEL || 'gemini-2.0-flash'
+const useProcessFunction = import.meta.env.VITE_USE_PROCESS_FUNCTION === 'true'
 
 function fileToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -71,6 +74,43 @@ export async function scanRepeatedStickers({
   }
 
   const base64Image = await fileToBase64(file)
+
+  // If configured, call the server-side Edge Function which will handle the prompt and Gemini call
+  if (useProcessFunction) {
+    const form = new FormData()
+    form.append('image', file)
+    form.append('albumTitle', albumTitle)
+    form.append('validStickerNumbers', JSON.stringify(validStickerNumbers))
+
+    const res = await supabase.functions.invoke('process-grid-image', { body: form })
+    if (!res || !res.data) {
+      throw new Error('La función de procesamiento no devolvió datos')
+    }
+
+    // Esperamos que la función retorne { missing_by_prefix: [{ prefix, numbers: [...] }], rawText?, model? }
+    const json = typeof res.data === 'string' ? JSON.parse(res.data) : res.data
+
+    // If function returned grouped missing_by_prefix, return it directly so frontend can map by section/prefix
+    const missingByPrefix = Array.isArray(json.missing_by_prefix)
+      ? json.missing_by_prefix.map((g: any) => ({ prefix: String(g.prefix || ''), numbers: (g.numbers || []).map(Number) }))
+      : undefined
+
+    // Also return normalized detectedNumbers for backwards compatibility
+    const expanded: number[] = []
+    if (missingByPrefix) {
+      missingByPrefix.forEach((group: { prefix: string; numbers: number[] }) =>
+        group.numbers.forEach((n: number) => expanded.push(Number(n)))
+      )
+    }
+
+    return {
+      detectedNumbers: normalizeDetectedNumbers(expanded, validStickerNumbers),
+      rawText: json.rawText || '',
+      model: json.model || 'process-grid-image',
+      missingByPrefix,
+    }
+  }
+
   const prompt = [
     'Analiza la foto y detecta únicamente números de figuritas visibles.',
     `El álbum es: ${albumTitle}.`,

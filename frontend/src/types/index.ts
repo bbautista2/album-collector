@@ -26,7 +26,7 @@ export interface Album {
 // Sticker Types
 export interface Sticker {
   id: string;
-  album_id: string;
+  section_id: string;
   sticker_number: number;
   name: string;
   category_or_team: string | null;
@@ -108,6 +108,15 @@ export interface ScanRepeatedResponse {
   detectedNumbers: DetectedStickerNumber[];
   rawText?: string;
   model?: string;
+  missingByPrefix?: Array<{ prefix: string; numbers: number[] }>;
+}
+
+export interface AlbumSection {
+  id: string;
+  album_id: string;
+  name: string;
+  prefix: string;
+  total_stickers: number;
 }
 
 export interface ExchangeCommitment {

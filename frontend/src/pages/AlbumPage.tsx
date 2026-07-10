@@ -13,6 +13,7 @@ export function AlbumPage() {
   const { user } = useAuthStore()
   const [album, setAlbum] = useState<Album | null>(null)
   const [stickers, setStickers] = useState<Sticker[]>([])
+  const [sections, setSections] = useState<import('../types').AlbumSection[]>([])
   const [userStickers, setUserStickers] = useState<Map<string, UserSticker>>(new Map())
   const [isLoading, setIsLoading] = useState(true)
   const [scanFile, setScanFile] = useState<File | null>(null)
@@ -42,15 +43,25 @@ export function AlbumPage() {
           setAlbum(albumData)
         }
 
-        // Fetch stickers for album
-        const { data: stickersData } = await supabase
-          .from('stickers')
+        // Fetch sections and stickers grouped by section
+        const { data: sectionsData } = await supabase
+          .from('album_sections')
           .select('*')
           .eq('album_id', albumId)
-          .order('sticker_number', { ascending: true })
+          .order('id', { ascending: true })
 
-        if (stickersData) {
-          setStickers(stickersData)
+        if (sectionsData) {
+          setSections(sectionsData)
+          const sectionIds = sectionsData.map((s: any) => s.id)
+          const { data: stickersData } = await supabase
+            .from('stickers')
+            .select('*')
+            .in('section_id', sectionIds)
+            .order('sticker_number', { ascending: true })
+
+          if (stickersData) {
+            setStickers(stickersData)
+          }
         }
 
         // Fetch user stickers
@@ -157,8 +168,56 @@ export function AlbumPage() {
         file: scanFile,
         albumTitle: album.title,
         validStickerNumbers: stickers.map((sticker) => sticker.sticker_number),
+        albumId: albumId,
       })
 
+      // If the function returned grouped missing_by_prefix, handle mapping by section/prefix
+      if (response.missingByPrefix && response.missingByPrefix.length > 0) {
+        const updates: Array<{ user_id: string; sticker_id: string; quantity_owned: number; quantity_repeated: number }> = []
+
+        response.missingByPrefix.forEach((group) => {
+          const prefix = group.prefix || ''
+          const section = sections.find((s) => (s.prefix || '') === prefix)
+          if (!section) return
+
+          group.numbers.forEach((num) => {
+            const matchingSticker = stickers.find((st) => st.section_id === section.id && st.sticker_number === num)
+            if (!matchingSticker) return
+
+            const existing = userStickers.get(matchingSticker.id)
+            if (scanMode === 'missing') {
+              const nextOwned = Math.max(existing?.quantity_owned || 0, 0) + 1
+              updates.push({ user_id: user.id, sticker_id: matchingSticker.id, quantity_owned: nextOwned, quantity_repeated: Math.min(existing?.quantity_repeated || 0, nextOwned) })
+            } else {
+              const nextRepeated = (existing?.quantity_repeated || 0) + 1
+              const nextOwned = Math.max((existing?.quantity_owned || 0) + 1, nextRepeated + 1)
+              updates.push({ user_id: user.id, sticker_id: matchingSticker.id, quantity_owned: nextOwned, quantity_repeated: nextRepeated })
+            }
+          })
+        })
+
+        if (updates.length === 0) return
+
+        const { error } = await supabase.from('user_stickers').upsert(updates, { onConflict: 'user_id,sticker_id' })
+        if (error) throw error
+
+        const updated = new Map(userStickers)
+        updates.forEach((update) => {
+          const existing = userStickers.get(update.sticker_id)
+          updated.set(update.sticker_id, {
+            id: existing?.id || '',
+            user_id: update.user_id,
+            sticker_id: update.sticker_id,
+            quantity_owned: update.quantity_owned,
+            quantity_repeated: update.quantity_repeated,
+            updated_at: new Date().toISOString(),
+          })
+        })
+        setUserStickers(updated)
+        return
+      }
+
+      // Backwards-compatible flow: flat detectedNumbers
       const validResults = response.detectedNumbers.filter((item) => item.count > 0)
       setScanResults(validResults)
 

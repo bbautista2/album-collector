@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS public.profiles (
 
 -- ============================================================================
 -- TABLA: albums
--- Almacena la información de los álbumes globales (ej. Mundial 2026)
+-- Almacena la información de los álbumes creados por usuarios o por el sistema
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS public.albums (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS public.albums (
   description TEXT,
   total_stickers INTEGER NOT NULL,
   image_url TEXT,
+  created_by UUID REFERENCES auth.users(id) ON DELETE SET NULL,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
@@ -56,6 +57,7 @@ CREATE TABLE IF NOT EXISTS public.user_stickers (
   sticker_id UUID NOT NULL REFERENCES public.stickers(id) ON DELETE CASCADE,
   quantity_owned INTEGER DEFAULT 0 CHECK (quantity_owned >= 0),
   quantity_repeated INTEGER DEFAULT 0 CHECK (quantity_repeated >= 0),
+  CONSTRAINT chk_user_stickers_repeated_lte_owned CHECK (quantity_repeated <= quantity_owned),
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
   UNIQUE(user_id, sticker_id)
 );
@@ -104,8 +106,11 @@ CREATE TABLE IF NOT EXISTS public.group_members (
 -- ÍNDICES para optimización
 -- ============================================================================
 CREATE INDEX IF NOT EXISTS idx_stickers_album_id ON public.stickers(album_id);
+CREATE INDEX IF NOT EXISTS idx_stickers_album_id_number ON public.stickers(album_id, sticker_number);
 CREATE INDEX IF NOT EXISTS idx_user_stickers_user_id ON public.user_stickers(user_id);
 CREATE INDEX IF NOT EXISTS idx_user_stickers_sticker_id ON public.user_stickers(sticker_id);
+CREATE INDEX IF NOT EXISTS idx_user_stickers_user_owned_sticker ON public.user_stickers(user_id, quantity_owned, sticker_id);
+CREATE INDEX IF NOT EXISTS idx_albums_created_by ON public.albums(created_by);
 CREATE INDEX IF NOT EXISTS idx_user_albums_user_id ON public.user_albums(user_id);
 CREATE INDEX IF NOT EXISTS idx_user_albums_album_id ON public.user_albums(album_id);
 CREATE INDEX IF NOT EXISTS idx_private_groups_created_by ON public.private_groups(created_by);
@@ -161,24 +166,70 @@ CREATE POLICY "Leer álbumes" ON public.albums
   FOR SELECT
   USING (TRUE);
 
--- Solo admin puede crear/actualizar álbumes (requiere role en usuarios)
-CREATE POLICY "Admin: crear/actualizar álbumes" ON public.albums
+CREATE POLICY "Crear álbumes autenticado" ON public.albums
   FOR INSERT
-  WITH CHECK (
-    EXISTS (
-      SELECT 1 FROM public.profiles
-      WHERE id = auth.uid() AND username = 'admin'
-    )
-  );
+  TO authenticated
+  WITH CHECK (created_by = auth.uid());
+
+CREATE POLICY "Actualizar álbum propio" ON public.albums
+  FOR UPDATE
+  TO authenticated
+  USING (created_by = auth.uid())
+  WITH CHECK (created_by = auth.uid());
+
+CREATE POLICY "Eliminar álbum propio" ON public.albums
+  FOR DELETE
+  TO authenticated
+  USING (created_by = auth.uid());
 
 -- ============================================================================
 -- POLÍTICAS RLS: STICKERS
--- Las figuras son públicas
+-- Las figuras son públicas, pero solo el creador del álbum puede modificarlas
 -- ============================================================================
 
 CREATE POLICY "Leer figuras" ON public.stickers
   FOR SELECT
   USING (TRUE);
+
+CREATE POLICY "Crear figuras en álbum propio" ON public.stickers
+  FOR INSERT
+  TO authenticated
+  WITH CHECK (
+    EXISTS (
+      SELECT 1 FROM public.albums
+      WHERE albums.id = stickers.album_id
+      AND albums.created_by = auth.uid()
+    )
+  );
+
+CREATE POLICY "Actualizar figuras de álbum propio" ON public.stickers
+  FOR UPDATE
+  TO authenticated
+  USING (
+    EXISTS (
+      SELECT 1 FROM public.albums
+      WHERE albums.id = stickers.album_id
+      AND albums.created_by = auth.uid()
+    )
+  )
+  WITH CHECK (
+    EXISTS (
+      SELECT 1 FROM public.albums
+      WHERE albums.id = stickers.album_id
+      AND albums.created_by = auth.uid()
+    )
+  );
+
+CREATE POLICY "Eliminar figuras de álbum propio" ON public.stickers
+  FOR DELETE
+  TO authenticated
+  USING (
+    EXISTS (
+      SELECT 1 FROM public.albums
+      WHERE albums.id = stickers.album_id
+      AND albums.created_by = auth.uid()
+    )
+  );
 
 -- ============================================================================
 -- POLÍTICAS RLS: USER_STICKERS
@@ -319,6 +370,22 @@ BEFORE INSERT ON public.private_groups
 FOR EACH ROW
 EXECUTE FUNCTION set_invite_code();
 
+-- Trigger para asignar el creador del álbum automáticamente
+CREATE OR REPLACE FUNCTION set_album_creator()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF NEW.created_by IS NULL THEN
+    NEW.created_by := auth.uid();
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trigger_album_creator
+BEFORE INSERT ON public.albums
+FOR EACH ROW
+EXECUTE FUNCTION set_album_creator();
+
 -- Función para actualizar updated_at
 CREATE OR REPLACE FUNCTION update_updated_at()
 RETURNS TRIGGER AS $$
@@ -393,7 +460,7 @@ END$$;
 -- ============================================================================
 
 COMMENT ON TABLE public.profiles IS 'Perfiles de usuarios con información de ubicación y privacidad';
-COMMENT ON TABLE public.albums IS 'Álbumes globales de figuras (ej. Mundial 2026)';
+COMMENT ON TABLE public.albums IS 'Álbumes de figuras creados por usuarios o por el sistema';
 COMMENT ON TABLE public.stickers IS 'Figuras individuales de cada álbum';
 COMMENT ON TABLE public.user_stickers IS 'Rastreo de figuras del usuario (cantidad tenida y repetidas)';
 COMMENT ON TABLE public.user_albums IS 'Rastreo de álbumes activados por usuario';
@@ -401,6 +468,7 @@ COMMENT ON TABLE public.private_groups IS 'Grupos privados para intercambio de f
 COMMENT ON TABLE public.group_members IS 'Miembros de grupos privados';
 
 COMMENT ON COLUMN public.profiles.is_public IS 'Si es TRUE, otros usuarios pueden ver el perfil y sus figuras';
+COMMENT ON COLUMN public.albums.created_by IS 'Usuario fundador del álbum; NULL si fue creado por el sistema';
 COMMENT ON COLUMN public.user_stickers.quantity_owned IS 'Cantidad de figuras que el usuario tiene';
 COMMENT ON COLUMN public.user_stickers.quantity_repeated IS 'Cantidad de figuras repetidas disponibles para intercambio';
 COMMENT ON COLUMN public.private_groups.invite_code IS 'Código único para unirse al grupo';
