@@ -21,6 +21,7 @@ export function AlbumPage() {
   const [scanLoading, setScanLoading] = useState(false)
   const [scanError, setScanError] = useState<string | null>(null)
   const [scanResults, setScanResults] = useState<DetectedStickerNumber[]>([])
+  const [scanRawText, setScanRawText] = useState<string | null>(null)
   const [pendingCommitments, setPendingCommitments] = useState<ExchangeCommitment[]>([])
   const [commitmentActionLoadingId, setCommitmentActionLoadingId] = useState<string | null>(null)
 
@@ -171,6 +172,13 @@ export function AlbumPage() {
         albumId: albumId,
       })
 
+      // Save rawText for debugging if present
+      if (response.rawText) {
+        setScanRawText(response.rawText)
+      } else {
+        setScanRawText(null)
+      }
+
       // If the function returned grouped missing_by_prefix, handle mapping by section/prefix
       if (response.missingByPrefix && response.missingByPrefix.length > 0) {
         const updates: Array<{ user_id: string; sticker_id: string; quantity_owned: number; quantity_repeated: number }> = []
@@ -196,7 +204,10 @@ export function AlbumPage() {
           })
         })
 
-        if (updates.length === 0) return
+        if (updates.length === 0) {
+          setScanError('No se detectaron figuritas para mapear en la imagen')
+          return
+        }
 
         const { error } = await supabase.from('user_stickers').upsert(updates, { onConflict: 'user_id,sticker_id' })
         if (error) throw error
@@ -222,6 +233,8 @@ export function AlbumPage() {
       setScanResults(validResults)
 
       if (validResults.length === 0) {
+        setScanError('No se detectaron figuritas en la imagen')
+        setScanResults([])
         return
       }
 
@@ -259,6 +272,7 @@ export function AlbumPage() {
         .filter((item): item is { user_id: string; sticker_id: string; quantity_owned: number; quantity_repeated: number } => item !== null)
 
       if (updates.length === 0) {
+        setScanError('No se detectaron figuritas mapeables en la imagen')
         return
       }
 
@@ -427,6 +441,13 @@ export function AlbumPage() {
           <div className="mt-4 rounded-md bg-orange-50 px-4 py-3 text-sm text-orange-900">
             {scanMode === 'repeated' ? 'Repetidas detectadas' : 'Faltantes conseguidas detectadas'}:{' '}
             {scanResults.map((item) => `#${item.stickerNumber} × ${item.count}`).join(', ')}
+          </div>
+        )}
+
+        {scanRawText && (
+          <div className="mt-4 rounded-md bg-gray-50 px-4 py-3 text-xs text-gray-700">
+            <div className="font-semibold text-gray-800 mb-1">Texto crudo del procesador (para depuración)</div>
+            <pre className="whitespace-pre-wrap break-words max-h-40 overflow-auto">{scanRawText}</pre>
           </div>
         )}
       </div>
