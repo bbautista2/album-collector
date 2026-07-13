@@ -77,8 +77,19 @@ export async function scanRepeatedStickers({
   // In creation mode (no albumId), call Gemini directly from client
   const useEdgeFunction = useProcessFunction && albumId
 
+  console.log('📡 Scan configuration:', {
+    useProcessFunction,
+    albumId,
+    useEdgeFunction,
+    albumTitle,
+    validStickerNumbers: validStickerNumbers.length,
+    geminiModel,
+  })
+
   if (useEdgeFunction) {
     // INVENTORY MODE: Use Edge Function with album verification
+    console.log('🔗 Using Edge Function (inventory mode)...')
+
     const form = new FormData()
     form.append('image', file)
     form.append('albumTitle', albumTitle)
@@ -115,6 +126,8 @@ export async function scanRepeatedStickers({
     }
   } else {
     // CREATION MODE: Call Gemini directly from client (no album verification needed)
+    console.log('🤖 Using direct Gemini API (creation mode)...')
+
     const prompt = [
       `Imagen de álbum: "${albumTitle || 'sin nombre'}"`,
       'Tu tarea: Extrae TODOS los números o códigos alfanuméricos visibles en esta imagen.',
@@ -124,6 +137,8 @@ export async function scanRepeatedStickers({
       'Responde ÚNICAMENTE con JSON en este formato exacto (sin explicación extra):',
       '{"missing_by_prefix":[{"prefix":"","numbers":[1,2,3,4,5]},{"prefix":"T","numbers":[1,2,3]}]}',
     ].join(' ')
+
+    console.log('🎯 Prompt:', prompt.substring(0, 100) + '...')
 
     const response = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent?key=${geminiApiKey}`,
@@ -154,18 +169,25 @@ export async function scanRepeatedStickers({
       }
     )
 
+    console.log('📨 Gemini API response status:', response.status)
+
     if (!response.ok) {
       const errorText = await response.text()
+      console.error('❌ Gemini API error:', errorText)
       throw new Error(`Gemini API error: ${errorText}`)
     }
 
     const data = await response.json()
     const rawText = data.candidates?.[0]?.content?.parts?.map((part: { text?: string }) => part.text || '').join('') || ''
 
+    console.log('📝 Raw response from Gemini:', rawText)
+
     try {
       const parsed = JSON.parse(extractJsonBlock(rawText)) as {
         missing_by_prefix?: Array<{ prefix?: string; numbers?: number[] }>
       }
+
+      console.log('✅ Parsed JSON:', parsed)
 
       const missingByPrefix = Array.isArray(parsed.missing_by_prefix)
         ? parsed.missing_by_prefix.map((g) => ({
@@ -174,6 +196,8 @@ export async function scanRepeatedStickers({
           }))
         : undefined
 
+      console.log('📊 Final missing_by_prefix:', missingByPrefix)
+
       return {
         detectedNumbers: [],
         rawText,
@@ -181,7 +205,7 @@ export async function scanRepeatedStickers({
         missingByPrefix,
       }
     } catch (err) {
-      console.error('Error parsing Gemini response:', err, rawText)
+      console.error('❌ Error parsing Gemini response:', err, 'Raw text was:', rawText)
       throw new Error(`Failed to parse image detection response: ${err instanceof Error ? err.message : 'Unknown error'}`)
     }
   }

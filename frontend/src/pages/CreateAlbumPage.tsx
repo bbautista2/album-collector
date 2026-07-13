@@ -410,7 +410,15 @@ export function CreateAlbumPage() {
     setIsScanning(true)
     setScanError(null)
 
+    console.log('🔍 Starting AI scan...', {
+      fileName: file.name,
+      fileSize: file.size,
+      fileType: file.type,
+      albumTitle: title.trim(),
+    })
+
     try {
+      console.log('📤 Calling scanRepeatedStickers...')
       const response = await scanRepeatedStickers({
         file,
         albumTitle: title.trim(),
@@ -418,21 +426,27 @@ export function CreateAlbumPage() {
         albumId: undefined,
       })
 
-      console.log('Scan response:', response)
+      console.log('✅ Scan response received:', response)
 
       // Check if we have any detected data at all
       if (!response.missingByPrefix) {
+        console.warn('⚠️ No missingByPrefix in response')
         setScanError('No se pudo procesar la imagen. Por favor intenta con otra foto más clara.')
         setIsScanning(false)
         return
       }
+
+      console.log('📊 Detected sections:', response.missingByPrefix)
 
       // Filter out empty sections but keep structure
       const nonEmptySections = response.missingByPrefix.filter(
         (s: any) => Array.isArray(s.numbers) && s.numbers.length > 0
       )
 
+      console.log('📋 Non-empty sections:', nonEmptySections)
+
       if (nonEmptySections.length === 0) {
+        console.warn('⚠️ No non-empty sections detected')
         setScanError(
           'No se detectaron números en la imagen. Intenta con:\n' +
           '• Una foto más clara y bien iluminada\n' +
@@ -450,9 +464,10 @@ export function CreateAlbumPage() {
         numbers: (group.numbers || []).map(Number),
       }))
 
+      console.log('🎉 Sections ready for confirmation:', sections)
       setDetectedSections(sections)
     } catch (err) {
-      console.error('Scan error:', err)
+      console.error('❌ Scan error:', err)
       setScanError(err instanceof Error ? err.message : 'Error al escanear la imagen. Intenta nuevamente.')
     } finally {
       setIsScanning(false)
