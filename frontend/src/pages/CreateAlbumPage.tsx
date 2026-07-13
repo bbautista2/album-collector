@@ -3,9 +3,9 @@ import { useNavigate } from 'react-router-dom'
 import { useAuthStore } from '../stores/authStore'
 import { useCollectorStore } from '../stores/collectorStore'
 import type { StickerDraft } from '../types'
- 
 
 type InputMode = 'range' | 'list' | 'groups'
+type CreateStep = 'basic-info' | 'load-method'
 
 function parseStickerList(rawValue: string): StickerDraft[] {
   return rawValue
@@ -103,14 +103,118 @@ function buildRangeStickers(start: number, end: number, prefix: string, category
   })
 }
 
+// ========== Component: LoadMethodCard ==========
+interface LoadMethodCardProps {
+  icon: string
+  title: string
+  description: string
+  selected: boolean
+  onClick: () => void
+}
+
+function LoadMethodCard({ icon, title, description, selected, onClick }: LoadMethodCardProps) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`w-full rounded-lg border-2 p-6 text-left transition ${
+        selected
+          ? 'border-primary-500 bg-primary-50 shadow-lg'
+          : 'border-gray-200 bg-white hover:border-primary-300 shadow-sm'
+      }`}
+    >
+      <div className="text-4xl">{icon}</div>
+      <h3 className={`mt-4 text-xl font-semibold ${selected ? 'text-primary-700' : 'text-gray-900'}`}>
+        {title}
+      </h3>
+      <p className="mt-2 text-sm text-gray-600">{description}</p>
+    </button>
+  )
+}
+
+// ========== Component: RangeForm ==========
+interface RangeFormProps {
+  rangeStart: number
+  rangeEnd: number
+  rangePrefix: string
+  rangeCategory: string
+  onStartChange: (value: number) => void
+  onEndChange: (value: number) => void
+  onPrefixChange: (value: string) => void
+  onCategoryChange: (value: string) => void
+}
+
+function RangeForm({
+  rangeStart,
+  rangeEnd,
+  rangePrefix,
+  rangeCategory,
+  onStartChange,
+  onEndChange,
+  onPrefixChange,
+  onCategoryChange,
+}: RangeFormProps) {
+  return (
+    <div className="grid gap-4 md:grid-cols-2">
+      <div>
+        <label className="mb-1 block text-sm font-medium text-gray-700">Número inicial</label>
+        <input
+          type="number"
+          min="1"
+          value={rangeStart}
+          onChange={(event) => onStartChange(Number.parseInt(event.target.value || '1', 10))}
+          className="w-full rounded-lg border border-gray-300 px-4 py-2 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-200"
+        />
+      </div>
+      <div>
+        <label className="mb-1 block text-sm font-medium text-gray-700">Número final</label>
+        <input
+          type="number"
+          min="1"
+          value={rangeEnd}
+          onChange={(event) => onEndChange(Number.parseInt(event.target.value || '1', 10))}
+          className="w-full rounded-lg border border-gray-300 px-4 py-2 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-200"
+        />
+      </div>
+      <div>
+        <label className="mb-1 block text-sm font-medium text-gray-700">Prefijo del nombre</label>
+        <input
+          type="text"
+          value={rangePrefix}
+          onChange={(event) => onPrefixChange(event.target.value)}
+          className="w-full rounded-lg border border-gray-300 px-4 py-2 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-200"
+        />
+      </div>
+      <div>
+        <label className="mb-1 block text-sm font-medium text-gray-700">Categoría / Equipo</label>
+        <input
+          type="text"
+          value={rangeCategory}
+          onChange={(event) => onCategoryChange(event.target.value)}
+          placeholder="Opcional"
+          className="w-full rounded-lg border border-gray-300 px-4 py-2 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-200"
+        />
+      </div>
+    </div>
+  )
+}
+
+// ========== Main Component ==========
 export function CreateAlbumPage() {
   const navigate = useNavigate()
   const { user } = useAuthStore()
   const { createAlbum, activateAlbum, isLoading, error } = useCollectorStore()
 
+  // Step management
+  const [currentStep, setCurrentStep] = useState<CreateStep>('basic-info')
+
+  // Step 1: Basic info
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
   const [imageUrl, setImageUrl] = useState('')
+
+  // Step 2: Load method
+  const [loadMethod, setLoadMethod] = useState<'manual' | 'ai'>('manual')
   const [inputMode, setInputMode] = useState<InputMode>('range')
   const [rangeStart, setRangeStart] = useState(1)
   const [rangeEnd, setRangeEnd] = useState(50)
@@ -118,6 +222,7 @@ export function CreateAlbumPage() {
   const [rangeCategory, setRangeCategory] = useState('')
   const [stickerListText, setStickerListText] = useState('1|Sticker 1|Equipo A\n2|Sticker 2|Equipo A')
   const [groupListText, setGroupListText] = useState('t1-20\ne1-40\n61-100')
+
   const [formError, setFormError] = useState<string | null>(null)
   
 
@@ -139,16 +244,20 @@ export function CreateAlbumPage() {
     return Array.from(deduplicated.values()).sort((first, second) => first.sticker_number - second.sticker_number)
   }, [inputMode, rangeCategory, rangeEnd, rangePrefix, rangeStart, stickerListText, groupListText])
 
-  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
+  const handleBasicInfoSubmit = () => {
+    if (!title.trim()) {
+      setFormError('El álbum debe tener un título')
+      return
+    }
+    setFormError(null)
+    setCurrentStep('load-method')
+  }
+
+  const handleLoadMethodSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
 
     if (!user) {
       navigate('/login')
-      return
-    }
-
-    if (!title.trim()) {
-      setFormError('El álbum debe tener un título')
       return
     }
 
@@ -175,14 +284,98 @@ export function CreateAlbumPage() {
     navigate(`/album/${albumId}`)
   }
 
+  // ========== RENDER ==========
+
+  if (currentStep === 'basic-info') {
+    return (
+      <div className="mx-auto max-w-2xl space-y-8 py-8">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h1 className="text-3xl font-bold text-gray-900">Crear nuevo álbum</h1>
+            <p className="mt-2 text-gray-600">Completa la información básica para comenzar.</p>
+          </div>
+
+          <button
+            onClick={() => navigate('/dashboard')}
+            className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50"
+          >
+            Volver
+          </button>
+        </div>
+
+        <div className="space-y-6 rounded-xl bg-white p-8 shadow-md">
+          <div className="space-y-4">
+            <div>
+              <label htmlFor="title" className="mb-2 block text-sm font-semibold text-gray-900">
+                Título del álbum *
+              </label>
+              <input
+                id="title"
+                type="text"
+                value={title}
+                onChange={(event) => setTitle(event.target.value)}
+                placeholder="Ej. Liga Local 2026, Pokémon Base Set, etc."
+                className="w-full rounded-lg border border-gray-300 px-4 py-3 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-200"
+              />
+            </div>
+
+            <div>
+              <label htmlFor="description" className="mb-2 block text-sm font-semibold text-gray-900">
+                Descripción (opcional)
+              </label>
+              <textarea
+                id="description"
+                value={description}
+                onChange={(event) => setDescription(event.target.value)}
+                rows={4}
+                placeholder="Describe el álbum, su temática, alcance y cualquier detalle importante..."
+                className="w-full rounded-lg border border-gray-300 px-4 py-3 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-200"
+              />
+            </div>
+
+            <div>
+              <label htmlFor="imageUrl" className="mb-2 block text-sm font-semibold text-gray-900">
+                Imagen de portada (URL opcional)
+              </label>
+              <input
+                id="imageUrl"
+                type="url"
+                value={imageUrl}
+                onChange={(event) => setImageUrl(event.target.value)}
+                placeholder="https://ejemplo.com/imagen.jpg"
+                className="w-full rounded-lg border border-gray-300 px-4 py-3 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-200"
+              />
+            </div>
+          </div>
+
+          {formError && (
+            <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+              {formError}
+            </div>
+          )}
+
+          <div className="flex gap-3 pt-4">
+            <button
+              type="button"
+              onClick={handleBasicInfoSubmit}
+              className="flex-1 rounded-lg bg-primary-600 px-4 py-3 font-semibold text-white transition hover:bg-primary-700"
+            >
+              Continuar
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // ========== STEP 2: LOAD METHOD ==========
+
   return (
-    <div className="mx-auto max-w-5xl space-y-8">
+    <div className="mx-auto max-w-4xl space-y-8 py-8">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900">Crear nuevo álbum</h1>
-          <p className="mt-2 text-gray-600">
-            Publica un álbum propio y define tus figuritas por rango o mediante una lista detallada.
-          </p>
+          <h1 className="text-3xl font-bold text-gray-900">Cargar figuritas</h1>
+          <p className="mt-2 text-gray-600">Elige cómo deseas inicializar el catálogo del álbum.</p>
         </div>
 
         <button
@@ -193,185 +386,172 @@ export function CreateAlbumPage() {
         </button>
       </div>
 
-      <form onSubmit={handleSubmit} className="grid gap-8 lg:grid-cols-[1.2fr_0.8fr]">
-        <div className="space-y-6 rounded-xl bg-white p-6 shadow-md">
-          <div className="grid gap-4 md:grid-cols-2">
-            <div className="md:col-span-2">
-              <label className="mb-1 block text-sm font-medium text-gray-700">Título del álbum</label>
-              <input
-                type="text"
-                value={title}
-                onChange={(event) => setTitle(event.target.value)}
-                placeholder="Ej. Liga Local 2026"
-                className="w-full rounded-lg border border-gray-300 px-4 py-2 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-200"
-              />
+      <form onSubmit={handleLoadMethodSubmit} className="space-y-8">
+        {/* Load Method Selection */}
+        <div className="grid gap-6 md:grid-cols-2">
+          <LoadMethodCard
+            icon="✏️"
+            title="Configuración Manual"
+            description="Crea secciones con rangos de números, listas personalizadas o grupos con prefijos."
+            selected={loadMethod === 'manual'}
+            onClick={() => setLoadMethod('manual')}
+          />
+          <LoadMethodCard
+            icon="📷"
+            title="Inicializar con Foto"
+            description="Carga una imagen de la plantilla para que Gemini AI detecte automáticamente la estructura."
+            selected={loadMethod === 'ai'}
+            onClick={() => setLoadMethod('ai')}
+          />
+        </div>
+
+        {/* Manual Configuration */}
+        {loadMethod === 'manual' && (
+          <div className="space-y-6 rounded-xl bg-white p-8 shadow-md">
+            <div>
+              <h3 className="text-lg font-semibold text-gray-900">Secciones del álbum</h3>
+              <p className="mt-1 text-sm text-gray-600">
+                Define cómo se organizarán las figuritas. Puedes usar rangos, listas personalizadas o grupos con prefijos.
+              </p>
             </div>
 
-            <div className="md:col-span-2">
-              <label className="mb-1 block text-sm font-medium text-gray-700">Descripción</label>
-              <textarea
-                value={description}
-                onChange={(event) => setDescription(event.target.value)}
-                rows={4}
-                placeholder="Describe el álbum, su temática y alcance"
-                className="w-full rounded-lg border border-gray-300 px-4 py-2 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-200"
-              />
-            </div>
-
-            <div className="md:col-span-2">
-              <label className="mb-1 block text-sm font-medium text-gray-700">Imagen de portada (URL opcional)</label>
-              <input
-                type="url"
-                value={imageUrl}
-                onChange={(event) => setImageUrl(event.target.value)}
-                placeholder="https://..."
-                className="w-full rounded-lg border border-gray-300 px-4 py-2 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-200"
-              />
-            </div>
-          </div>
-
-          <div className="space-y-4 rounded-lg border border-gray-200 p-4">
-            <div className="flex flex-wrap gap-2">
+            {/* Input Mode Selector */}
+            <div className="flex flex-wrap gap-2 rounded-lg border border-gray-200 bg-gray-50 p-3">
               <button
                 type="button"
                 onClick={() => setInputMode('range')}
-                className={`rounded-full px-4 py-2 text-sm font-medium transition ${
+                className={`rounded-lg px-4 py-2 text-sm font-medium transition ${
                   inputMode === 'range'
-                    ? 'bg-primary-600 text-white'
-                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    ? 'bg-primary-600 text-white shadow-sm'
+                    : 'bg-white text-gray-700 hover:bg-gray-100'
                 }`}
               >
-                Generar por rango
+                Por Rango
               </button>
               <button
                 type="button"
                 onClick={() => setInputMode('list')}
-                className={`rounded-full px-4 py-2 text-sm font-medium transition ${
+                className={`rounded-lg px-4 py-2 text-sm font-medium transition ${
                   inputMode === 'list'
-                    ? 'bg-primary-600 text-white'
-                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    ? 'bg-primary-600 text-white shadow-sm'
+                    : 'bg-white text-gray-700 hover:bg-gray-100'
                 }`}
               >
-                Cargar lista manual
+                Lista Manual
+              </button>
+              <button
+                type="button"
+                onClick={() => setInputMode('groups')}
+                className={`rounded-lg px-4 py-2 text-sm font-medium transition ${
+                  inputMode === 'groups'
+                    ? 'bg-primary-600 text-white shadow-sm'
+                    : 'bg-white text-gray-700 hover:bg-gray-100'
+                }`}
+              >
+                Grupos / Prefijos
               </button>
             </div>
 
+            {/* Input Content */}
             {inputMode === 'range' ? (
-              <div className="grid gap-4 md:grid-cols-2">
-                <div>
-                  <label className="mb-1 block text-sm font-medium text-gray-700">Número inicial</label>
-                  <input
-                    type="number"
-                    min="1"
-                    value={rangeStart}
-                    onChange={(event) => setRangeStart(Number.parseInt(event.target.value || '1', 10))}
-                    className="w-full rounded-lg border border-gray-300 px-4 py-2"
-                  />
-                </div>
-                <div>
-                  <label className="mb-1 block text-sm font-medium text-gray-700">Número final</label>
-                  <input
-                    type="number"
-                    min="1"
-                    value={rangeEnd}
-                    onChange={(event) => setRangeEnd(Number.parseInt(event.target.value || '1', 10))}
-                    className="w-full rounded-lg border border-gray-300 px-4 py-2"
-                  />
-                </div>
-                <div>
-                  <label className="mb-1 block text-sm font-medium text-gray-700">Prefijo del nombre</label>
-                  <input
-                    type="text"
-                    value={rangePrefix}
-                    onChange={(event) => setRangePrefix(event.target.value)}
-                    className="w-full rounded-lg border border-gray-300 px-4 py-2"
-                  />
-                </div>
-                <div>
-                  <label className="mb-1 block text-sm font-medium text-gray-700">Categoría / Equipo</label>
-                  <input
-                    type="text"
-                    value={rangeCategory}
-                    onChange={(event) => setRangeCategory(event.target.value)}
-                    placeholder="Opcional"
-                    className="w-full rounded-lg border border-gray-300 px-4 py-2"
-                  />
-                </div>
-              </div>
+              <RangeForm
+                rangeStart={rangeStart}
+                rangeEnd={rangeEnd}
+                rangePrefix={rangePrefix}
+                rangeCategory={rangeCategory}
+                onStartChange={setRangeStart}
+                onEndChange={setRangeEnd}
+                onPrefixChange={setRangePrefix}
+                onCategoryChange={setRangeCategory}
+              />
             ) : inputMode === 'list' ? (
-              <div>
-                <label className="mb-1 block text-sm font-medium text-gray-700">Lista de figuritas</label>
+              <div className="space-y-3">
+                <label htmlFor="stickerListText" className="block text-sm font-medium text-gray-700">
+                  Lista de figuritas
+                </label>
                 <textarea
+                  id="stickerListText"
                   value={stickerListText}
                   onChange={(event) => setStickerListText(event.target.value)}
-                  rows={10}
-                  className="w-full rounded-lg border border-gray-300 px-4 py-2 font-mono text-sm"
+                  rows={8}
+                  className="w-full rounded-lg border border-gray-300 px-4 py-2 font-mono text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-200"
                 />
-                <p className="mt-2 text-xs text-gray-500">
-                  Usa una línea por figurita: <code>numero|nombre|categoria</code>. El nombre y la categoría son opcionales.
+                <p className="text-xs text-gray-500">
+                  Formato: <code>numero|nombre|categoria</code> (una por línea). El nombre y categoría son opcionales.
                 </p>
               </div>
             ) : (
-              <div>
-                <label className="mb-1 block text-sm font-medium text-gray-700">Grupos / Prefijos</label>
+              <div className="space-y-3">
+                <label htmlFor="groupListText" className="block text-sm font-medium text-gray-700">
+                  Grupos / Prefijos
+                </label>
                 <textarea
+                  id="groupListText"
                   value={groupListText}
                   onChange={(event) => setGroupListText(event.target.value)}
                   rows={6}
-                  className="w-full rounded-lg border border-gray-300 px-4 py-2 font-mono text-sm"
+                  className="w-full rounded-lg border border-gray-300 px-4 py-2 font-mono text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-200"
                 />
-                <p className="mt-2 text-xs text-gray-500">
-                  Define grupos por línea o separados por comas. Ejemplos: <code>t1-20</code>, <code>e1-40</code>, <code>61-100</code>.
-                  Los prefijos se mantendrán en el nombre (p.ej. <code>t1</code>), y las posiciones serán asignadas secuencialmente.
+                <p className="text-xs text-gray-500">
+                  Ejemplos: <code>t1-20</code>, <code>e1-40</code>, <code>61-100</code>. Usa una línea por grupo o separa con comas.
                 </p>
               </div>
             )}
-          </div>
 
-          {(formError || error) && (
-            <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-              {formError || error}
+            {/* Preview */}
+            <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
+              <p className="mb-3 text-sm font-semibold text-gray-900">
+                📊 Previsualizando: <span className="text-primary-600">{stickerDrafts.length} figuritas</span>
+              </p>
+              <div className="grid gap-2 md:grid-cols-2">
+                {stickerDrafts.slice(0, 6).map((sticker) => (
+                  <div key={sticker.sticker_number} className="rounded px-2 py-1 bg-white text-xs text-gray-700">
+                    <span className="font-semibold">#{sticker.sticker_number}</span> {sticker.name}
+                  </div>
+                ))}
+                {stickerDrafts.length > 6 && (
+                  <div className="rounded px-2 py-1 bg-white text-xs text-gray-500">
+                    + {stickerDrafts.length - 6} más...
+                  </div>
+                )}
+              </div>
             </div>
-          )}
+          </div>
+        )}
 
+        {/* AI Configuration - Placeholder */}
+        {loadMethod === 'ai' && (
+          <div className="rounded-xl bg-gradient-to-br from-primary-50 to-blue-50 p-8 shadow-md text-center">
+            <p className="text-gray-600">
+              La carga automática con IA estará disponible pronto. Por ahora, usa la configuración manual.
+            </p>
+          </div>
+        )}
+
+        {/* Errors */}
+        {(formError || error) && (
+          <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            {formError || error}
+          </div>
+        )}
+
+        {/* Actions */}
+        <div className="flex gap-3 pt-4">
+          <button
+            type="button"
+            onClick={() => setCurrentStep('basic-info')}
+            className="rounded-lg border border-gray-300 px-6 py-3 font-semibold text-gray-700 transition hover:bg-gray-50"
+          >
+            Atrás
+          </button>
           <button
             type="submit"
             disabled={isLoading}
-            className="w-full rounded-lg bg-primary-600 px-4 py-3 font-semibold text-white transition hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-50"
+            className="flex-1 rounded-lg bg-primary-600 px-6 py-3 font-semibold text-white transition hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {isLoading ? 'Creando álbum...' : 'Crear álbum y abrir colección'}
+            {isLoading ? '⏳ Creando álbum...' : '✅ Crear álbum y abrir colección'}
           </button>
         </div>
-
-        <aside className="space-y-4 rounded-xl bg-slate-900 p-6 text-white shadow-md">
-          <div>
-            <p className="text-sm uppercase tracking-wide text-primary-200">Vista previa</p>
-            <h2 className="mt-2 text-2xl font-semibold">{title.trim() || 'Tu nuevo álbum'}</h2>
-            <p className="mt-2 text-sm text-slate-300">
-              {description.trim() || 'La descripción aparecerá aquí cuando completes el formulario.'}
-            </p>
-          </div>
-
-          <div className="rounded-lg bg-slate-800 p-4">
-            <p className="text-sm text-slate-300">Total de figuritas</p>
-            <p className="mt-2 text-4xl font-bold text-white">{stickerDrafts.length}</p>
-          </div>
-
-          <div>
-            <p className="mb-3 text-sm font-medium text-slate-300">Primeras figuritas</p>
-            <div className="space-y-2">
-              {stickerDrafts.slice(0, 8).map((sticker) => (
-                <div key={sticker.sticker_number} className="rounded-lg bg-slate-800 px-3 py-2 text-sm">
-                  <span className="font-semibold text-primary-200">#{sticker.sticker_number}</span>{' '}
-                  {sticker.name}
-                  {sticker.category_or_team ? (
-                    <span className="ml-2 text-xs text-slate-400">· {sticker.category_or_team}</span>
-                  ) : null}
-                </div>
-              ))}
-            </div>
-          </div>
-        </aside>
       </form>
     </div>
   )

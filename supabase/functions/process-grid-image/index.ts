@@ -47,6 +47,56 @@ async function fileToBase64FromBuffer(buffer: ArrayBuffer, mime = 'image/jpeg') 
   return btoa(binary)
 }
 
+function extractJsonBlock(text: string): string {
+  const fencedMatch = text.match(/```json\s*([\s\S]*?)```/i)
+  if (fencedMatch?.[1]) {
+    return fencedMatch[1].trim()
+  }
+
+  const objectMatch = text.match(/\{[\s\S]*\}/)
+  return objectMatch?.[0]?.trim() || text.trim()
+}
+
+function normalizeMissingByPrefix(
+  payload: any,
+  validStickerNumbers: number[],
+  allowedPrefixes: string[]
+): { missing_by_prefix: Array<{ prefix: string; numbers: number[] }> } {
+  const validSet = new Set(validStickerNumbers)
+  const prefixSet = new Set(allowedPrefixes.map((value) => String(value || '')))
+
+  const groups = Array.isArray(payload?.missing_by_prefix)
+    ? payload.missing_by_prefix
+    : [{ prefix: '', numbers: [] }]
+
+  const normalized = groups.map((group: any) => {
+    const prefix = String(group?.prefix || '')
+    const numbersRaw = Array.isArray(group?.numbers) ? group.numbers : []
+    const numbers = Array.from(
+      new Set<number>(
+        numbersRaw
+          .map((value: any) => Number(value))
+          .filter((value: number) => Number.isInteger(value) && value > 0)
+          .filter((value: number) => (validSet.size > 0 ? validSet.has(value) : true))
+      )
+    ).sort((a, b) => a - b)
+
+    return {
+      prefix: prefixSet.size > 0 ? (prefixSet.has(prefix) ? prefix : '') : prefix,
+      numbers,
+    }
+  })
+
+  return { missing_by_prefix: normalized }
+}
+
+function hasDetectedNumbers(payload: any): boolean {
+  return (
+    Array.isArray(payload?.missing_by_prefix) &&
+    payload.missing_by_prefix.some((group: any) => Array.isArray(group?.numbers) && group.numbers.length > 0)
+  )
+}
+
 serve(async (req: Request) => {
   // Handle CORS preflight requests
   if (req.method === 'OPTIONS') {
@@ -95,7 +145,18 @@ serve(async (req: Request) => {
     const albumIdValue = form.get('albumId')
     const albumId = albumIdValue !== null ? String(albumIdValue) : null
     const albumTitle = String(form.get('albumTitle') || '')
+    const validStickerNumbersRaw = String(form.get('validStickerNumbers') || '[]')
     const file = form.get('image') as File | null
+
+    let validStickerNumbers: number[] = []
+    try {
+      const parsedValid = JSON.parse(validStickerNumbersRaw)
+      if (Array.isArray(parsedValid)) {
+        validStickerNumbers = parsedValid.map((value) => Number(value)).filter((value) => Number.isInteger(value) && value > 0)
+      }
+    } catch {
+      validStickerNumbers = []
+    }
 
     if (!file) {
       return new Response(JSON.stringify({ error: 'No se envió imagen' }), { status: 400, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } })
@@ -111,7 +172,7 @@ serve(async (req: Request) => {
     // Verify the user owns this album (using service role)
     const { data: album, error: albumError } = await supabaseServiceRole
       .from('albums')
-      .select('id, user_id')
+      .select('id, created_by')
       .eq('id', albumId)
       .single()
 
@@ -122,7 +183,7 @@ serve(async (req: Request) => {
       return new Response(JSON.stringify({ error: 'Álbum no encontrado', debug: { errorMsg: albumError?.message, albumId } }), { status: 404, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } })
     }
 
-    if (album.user_id !== userId) {
+    if (album.created_by !== userId) {
       return new Response(JSON.stringify({ error: 'No tienes permiso para procesar este álbum' }), { status: 403, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } })
     }
 
@@ -140,72 +201,105 @@ serve(async (req: Request) => {
     const sectionSummary = (sections || [])
       .map((s: any) => `Sección '${s.name}' con prefijo '${s.prefix || ''}'`)
       .join(', ')
+    const allowedPrefixes = (sections || []).map((s: any) => String(s.prefix || ''))
+    const validStickerHint = validStickerNumbers.length > 0
+      ? `Números válidos del álbum: ${validStickerNumbers.slice(0, 300).join(', ')}.`
+      : 'Si no hay contexto suficiente, devuelve el mejor intento de números visibles.'
 
     // Read file as base64
     const ab = await file.arrayBuffer()
     const base64 = await fileToBase64FromBuffer(ab, file.type || 'image/jpeg')
 
-    // Build prompt
-    const prompt = `Analiza la imagen de la grilla de control. El usuario ha tachado con una 'X' las que ya tiene. Extrae los elementos que NO están tachados (los faltantes). Este álbum está compuesto por las siguientes secciones y prefijos: ${sectionSummary}. Devuelve estrictamente un formato JSON que mapee las faltas encontradas agrupadas por su prefijo, por ejemplo: { "missing_by_prefix": [ { "prefix": "", "numbers": [1, 3, 5] }, { "prefix": "T", "numbers": [4, 6, 12] } ] }`
-
-    const body = {
-      contents: [
-        {
-          parts: [
-            { text: prompt },
-            {
-              inline_data: {
-                mime_type: file.type || 'image/jpeg',
-                data: base64,
+    const callGemini = async (promptText: string) => {
+      const body = {
+        contents: [
+          {
+            parts: [
+              { text: promptText },
+              {
+                inline_data: {
+                  mime_type: file.type || 'image/jpeg',
+                  data: base64,
+                },
               },
-            },
-          ],
+            ],
+          },
+        ],
+        generationConfig: {
+          temperature: 0.1,
+          responseMimeType: 'application/json',
         },
-      ],
-      generationConfig: {
-        temperature: 0.1,
-        responseMimeType: 'application/json',
-      },
-    }
-
-    const resp = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
       }
-    )
 
-    if (!resp.ok) {
-      const text = await resp.text()
-      return new Response(JSON.stringify({ error: text }), { status: resp.status, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } })
+      const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        }
+      )
+
+      if (!response.ok) {
+        const text = await response.text()
+        throw new Error(text)
+      }
+
+      const data = await response.json()
+      return data.candidates?.[0]?.content?.parts?.map((p: any) => p.text || '').join('') || ''
     }
 
-    const data = await resp.json()
+    const promptPrimary = [
+      `Álbum: ${albumTitle || 'sin nombre'}.`,
+      `Secciones/prefijos: ${sectionSummary || 'sin secciones'}.`,
+      validStickerHint,
+      'Analiza la imagen y detecta figuritas faltantes visibles.',
+      'Devuelve SOLO JSON con este formato exacto:',
+      '{"missing_by_prefix":[{"prefix":"","numbers":[1,2]},{"prefix":"T","numbers":[4,10]}]}',
+      'No agregues texto extra fuera del JSON.',
+    ].join(' ')
 
-    const rawText = data.candidates?.[0]?.content?.parts?.map((p: any) => p.text || '').join('') || ''
+    let rawText = ''
+    let parsed: any = null
 
-    // Try to extract JSON block
-    const jsonMatch = rawText.match(/\{[\s\S]*\}/)
-    let parsed = null
-    if (jsonMatch) {
+    try {
+      rawText = await callGemini(promptPrimary)
+      parsed = JSON.parse(extractJsonBlock(rawText))
+    } catch {
+      parsed = null
+    }
+
+    let normalized = normalizeMissingByPrefix(parsed, validStickerNumbers, allowedPrefixes)
+
+    // Retry with more permissive OCR prompt if nothing was detected
+    if (!hasDetectedNumbers(normalized)) {
+      const promptFallback = [
+        `Álbum: ${albumTitle || 'sin nombre'}.`,
+        `Prefijos permitidos: ${(allowedPrefixes.length ? allowedPrefixes : ['']).join(', ')}.`,
+        validStickerHint,
+        'Segundo intento OCR: identifica todos los códigos o números visibles (por ejemplo T12, 45, E3).',
+        'Convierte esos hallazgos a JSON estricto agrupado por prefijo:',
+        '{"missing_by_prefix":[{"prefix":"","numbers":[]},{"prefix":"T","numbers":[]}]}',
+        'No devuelvas explicación, solo JSON.',
+      ].join(' ')
+
       try {
-        parsed = JSON.parse(jsonMatch[0])
-      } catch (e) {
-        // ignore
+        const rawTextFallback = await callGemini(promptFallback)
+        const parsedFallback = JSON.parse(extractJsonBlock(rawTextFallback))
+        const normalizedFallback = normalizeMissingByPrefix(parsedFallback, validStickerNumbers, allowedPrefixes)
+
+        if (hasDetectedNumbers(normalizedFallback)) {
+          normalized = normalizedFallback
+          rawText = rawTextFallback
+        } else {
+          rawText = `${rawText}\n\n[Fallback]\n${rawTextFallback}`
+        }
+      } catch {
+        // keep primary result
       }
     }
 
-    // If parse failed, try to extract numbers heuristically (simple fallback)
-    if (!parsed) {
-      const rawMatches = rawText.match(/\d+/g) || []
-      const nums = Array.from(new Set(rawMatches.map((n: string) => Number(n))))
-      // Group all as prefix '' fallback
-      parsed = { missing_by_prefix: [{ prefix: '', numbers: nums }] }
-    }
-
-    return new Response(JSON.stringify({ ...(parsed || {}), rawText, model: GEMINI_MODEL }), {
+    return new Response(JSON.stringify({ ...normalized, rawText, model: GEMINI_MODEL }), {
       status: 200,
       headers: {
         'Content-Type': 'application/json',

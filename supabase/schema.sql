@@ -299,11 +299,7 @@ CREATE POLICY "Ver grupos donde soy miembro" ON public.private_groups
   FOR SELECT
   USING (
     auth.uid() = created_by OR
-    EXISTS (
-      SELECT 1 FROM public.group_members
-      WHERE group_id = private_groups.id
-      AND user_id = auth.uid()
-    )
+    public.is_group_member(private_groups.id, auth.uid())
   );
 
 CREATE POLICY "Crear grupos privados" ON public.private_groups
@@ -328,9 +324,7 @@ CREATE POLICY "Ver miembros de mi grupo" ON public.group_members
   FOR SELECT
   USING (
     user_id = auth.uid() OR
-    EXISTS (
-      SELECT 1 FROM public.groups g WHERE g.id = group_members.group_id AND g.created_by = auth.uid()
-    )
+    public.is_group_member(group_members.group_id, auth.uid())
   );
 
 CREATE POLICY "Unirse a grupo" ON public.group_members
@@ -344,6 +338,24 @@ CREATE POLICY "Dejar grupo" ON public.group_members
 -- ============================================================================
 -- FUNCIONES Y TRIGGERS
 -- ============================================================================
+
+CREATE OR REPLACE FUNCTION public.is_group_member(p_group_id UUID, p_user_id UUID)
+RETURNS BOOLEAN
+LANGUAGE SQL
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+  SELECT EXISTS (
+    SELECT 1
+    FROM public.group_members gm
+    WHERE gm.group_id = p_group_id
+      AND gm.user_id = p_user_id
+  );
+$$;
+
+REVOKE ALL ON FUNCTION public.is_group_member(UUID, UUID) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.is_group_member(UUID, UUID) TO authenticated;
 
 -- Función para generar código de invitación único
 CREATE OR REPLACE FUNCTION generate_invite_code()
