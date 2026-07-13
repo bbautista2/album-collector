@@ -314,16 +314,6 @@ serve(async (req: Request) => {
         'Access-Control-Allow-Headers': 'Content-Type, Authorization, apikey, x-client-info',
       },
     })
-
-    return new Response(JSON.stringify({ ...normalized, rawText, model: GEMINI_MODEL }), {
-      status: 200,
-      headers: {
-        'Content-Type': 'application/json',
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Methods': 'POST, OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type, Authorization, apikey, x-client-info',
-      },
-    })
   } catch (err: any) {
     return new Response(JSON.stringify({ error: err?.message || String(err) }), { status: 500, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } })
   }
