@@ -2,10 +2,16 @@ import { useMemo, useState, type FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuthStore } from '../stores/authStore'
 import { useCollectorStore } from '../stores/collectorStore'
+import { scanRepeatedStickers } from '../lib/repeatedScanner'
 import type { StickerDraft } from '../types'
 
 type InputMode = 'range' | 'list' | 'groups'
 type CreateStep = 'basic-info' | 'load-method'
+
+interface DetectedSection {
+  prefix: string
+  numbers: number[]
+}
 
 function parseStickerList(rawValue: string): StickerDraft[] {
   return rawValue
@@ -132,6 +138,128 @@ function LoadMethodCard({ icon, title, description, selected, onClick }: LoadMet
   )
 }
 
+// ========== Component: AILoadForm ==========
+interface AILoadFormProps {
+  albumTitle: string
+  isLoading: boolean
+  isScanning: boolean
+  detectedSections: DetectedSection[]
+  scanError: string | null
+  onScan: (file: File) => Promise<void>
+  onConfirm: () => void
+  onCancel: () => void
+}
+
+function AILoadForm({
+  albumTitle: _albumTitle,
+  isLoading,
+  isScanning,
+  detectedSections,
+  scanError,
+  onScan,
+  onConfirm,
+  onCancel,
+}: AILoadFormProps) {
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.currentTarget.files?.[0]
+    if (file) {
+      await onScan(file)
+    }
+  }
+
+  return (
+    <div className="space-y-6 rounded-xl bg-white p-8 shadow-md">
+      <div>
+        <h3 className="text-lg font-semibold text-gray-900">Inicializar con foto de grilla</h3>
+        <p className="mt-1 text-sm text-gray-600">
+          Carga una foto de la plantilla del álbum y Gemini detectará automáticamente las secciones y figuritas.
+        </p>
+      </div>
+
+      {detectedSections.length === 0 ? (
+        <div className="space-y-4">
+          <div className="rounded-lg border-2 border-dashed border-gray-300 p-8 text-center">
+            <input
+              type="file"
+              accept="image/*"
+              onChange={handleFileChange}
+              disabled={isScanning || isLoading}
+              className="hidden"
+              id="imageUpload"
+            />
+            <label
+              htmlFor="imageUpload"
+              className="block cursor-pointer select-none"
+            >
+              <div className="text-4xl mb-2">📷</div>
+              <p className="font-medium text-gray-900">Selecciona una imagen</p>
+              <p className="text-sm text-gray-500 mt-1">o arrastra aquí</p>
+            </label>
+          </div>
+
+          {isScanning && (
+            <div className="flex flex-col items-center gap-3 rounded-lg bg-blue-50 p-6">
+              <div className="animate-spin">⏳</div>
+              <p className="text-center text-sm font-medium text-blue-900">
+                Generando el catálogo del álbum, por favor espera...
+              </p>
+            </div>
+          )}
+
+          {scanError && (
+            <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+              {scanError}
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className="space-y-4">
+          <div className="rounded-lg border border-green-200 bg-green-50 p-4">
+            <p className="text-sm font-semibold text-green-900">✅ Estructura detectada</p>
+            <div className="mt-3 grid gap-2">
+              {detectedSections.map((section) => (
+                <div
+                  key={section.prefix}
+                  className="rounded bg-white px-3 py-2 text-sm text-gray-700 border border-green-100"
+                >
+                  <span className="font-semibold text-green-700">{section.prefix || 'Sin prefijo'}</span>
+                  {' · '}
+                  <span className="text-gray-600">{section.numbers.length} figuritas</span>
+                  {section.numbers.length <= 10 && (
+                    <>
+                      {' · '}<span className="text-xs text-gray-500">
+                        {section.numbers.join(', ')}
+                      </span>
+                    </>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex gap-3">
+            <button
+              type="button"
+              onClick={onCancel}
+              className="flex-1 rounded-lg border border-gray-300 px-4 py-2 font-medium text-gray-700 transition hover:bg-gray-50"
+            >
+              Cancelar
+            </button>
+            <button
+              type="button"
+              onClick={onConfirm}
+              disabled={isLoading}
+              className="flex-1 rounded-lg bg-green-600 px-4 py-2 font-medium text-white transition hover:bg-green-700 disabled:opacity-50"
+            >
+              Confirmar estructura
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ========== Component: RangeForm ==========
 interface RangeFormProps {
   rangeStart: number
@@ -223,6 +351,11 @@ export function CreateAlbumPage() {
   const [stickerListText, setStickerListText] = useState('1|Sticker 1|Equipo A\n2|Sticker 2|Equipo A')
   const [groupListText, setGroupListText] = useState('t1-20\ne1-40\n61-100')
 
+  // AI scanning state
+  const [isScanning, setIsScanning] = useState(false)
+  const [scanError, setScanError] = useState<string | null>(null)
+  const [detectedSections, setDetectedSections] = useState<DetectedSection[]>([])
+
   const [formError, setFormError] = useState<string | null>(null)
   
 
@@ -244,6 +377,26 @@ export function CreateAlbumPage() {
     return Array.from(deduplicated.values()).sort((first, second) => first.sticker_number - second.sticker_number)
   }, [inputMode, rangeCategory, rangeEnd, rangePrefix, rangeStart, stickerListText, groupListText])
 
+  // Convert detected sections to sticker drafts for AI mode
+  const aiGeneratedDrafts = useMemo(() => {
+    const drafts: StickerDraft[] = []
+    let seq = 1
+
+    detectedSections.forEach((section) => {
+      section.numbers.forEach((num) => {
+        const label = section.prefix ? `${section.prefix}${num}` : `${num}`
+        drafts.push({
+          sticker_number: seq,
+          name: label,
+          category_or_team: null,
+        })
+        seq += 1
+      })
+    })
+
+    return drafts.sort((first, second) => first.sticker_number - second.sticker_number)
+  }, [detectedSections])
+
   const handleBasicInfoSubmit = () => {
     if (!title.trim()) {
       setFormError('El álbum debe tener un título')
@@ -251,6 +404,50 @@ export function CreateAlbumPage() {
     }
     setFormError(null)
     setCurrentStep('load-method')
+  }
+
+  const handleAIScan = async (file: File) => {
+    setIsScanning(true)
+    setScanError(null)
+
+    try {
+      const response = await scanRepeatedStickers({
+        file,
+        albumTitle: title.trim(),
+        validStickerNumbers: [], // Para AI mode, aceptamos todos los números
+        albumId: undefined,
+      })
+
+      if (!response.missingByPrefix || response.missingByPrefix.length === 0) {
+        setScanError('No se detectaron figuritas en la imagen. Intenta con otra foto.')
+        setIsScanning(false)
+        return
+      }
+
+      // Convert missingByPrefix to DetectedSection format
+      const sections = response.missingByPrefix.map((group: any) => ({
+        prefix: String(group.prefix || ''),
+        numbers: (group.numbers || []).map(Number),
+      }))
+
+      setDetectedSections(sections)
+    } catch (err) {
+      setScanError(err instanceof Error ? err.message : 'Error al escanear la imagen')
+    } finally {
+      setIsScanning(false)
+    }
+  }
+
+  const handleAIConfirm = () => {
+    // AI detected sections are ready, now user submits form
+    // stickerDrafts will be replaced by aiGeneratedDrafts when loadMethod === 'ai'
+    // (handled in form submission)
+    setFormError(null)
+  }
+
+  const handleAICancel = () => {
+    setDetectedSections([])
+    setScanError(null)
   }
 
   const handleLoadMethodSubmit = async (event: FormEvent<HTMLFormElement>) => {
@@ -261,7 +458,10 @@ export function CreateAlbumPage() {
       return
     }
 
-    if (stickerDrafts.length === 0) {
+    // Use AI-generated drafts if in AI mode, otherwise use manual input
+    const draftsToUse = loadMethod === 'ai' ? aiGeneratedDrafts : stickerDrafts
+
+    if (draftsToUse.length === 0) {
       setFormError('Debes definir al menos una figurita')
       return
     }
@@ -272,7 +472,7 @@ export function CreateAlbumPage() {
       title: title.trim(),
       description: description.trim(),
       image_url: imageUrl.trim(),
-      stickers: stickerDrafts,
+      stickers: draftsToUse,
     })
 
     if (!albumId) {
@@ -519,13 +719,18 @@ export function CreateAlbumPage() {
           </div>
         )}
 
-        {/* AI Configuration - Placeholder */}
+        {/* AI Configuration */}
         {loadMethod === 'ai' && (
-          <div className="rounded-xl bg-gradient-to-br from-primary-50 to-blue-50 p-8 shadow-md text-center">
-            <p className="text-gray-600">
-              La carga automática con IA estará disponible pronto. Por ahora, usa la configuración manual.
-            </p>
-          </div>
+          <AILoadForm
+            albumTitle={title.trim()}
+            isLoading={isLoading}
+            isScanning={isScanning}
+            detectedSections={detectedSections}
+            scanError={scanError}
+            onScan={handleAIScan}
+            onConfirm={handleAIConfirm}
+            onCancel={handleAICancel}
+          />
         )}
 
         {/* Errors */}
