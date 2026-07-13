@@ -70,18 +70,15 @@ export async function scanRepeatedStickers({
     throw new Error('Falta `VITE_GEMINI_API_KEY` en tus variables de entorno')
   }
 
-  if (validStickerNumbers.length === 0) {
-    return { detectedNumbers: [] }
-  }
-
   const base64Image = await fileToBase64(file)
 
-  // If configured, call the server-side Edge Function which will handle the prompt and Gemini call
-  if (useProcessFunction) {
-    if (!albumId) {
-      throw new Error('Falta albumId para procesar la imagen')
-    }
+  // Determine if we should use Edge Function or client-side Gemini
+  // Use Edge Function only if albumId is provided (inventory mode with album verification)
+  // In creation mode (no albumId), call Gemini directly from client
+  const useEdgeFunction = useProcessFunction && albumId
 
+  if (useEdgeFunction) {
+    // INVENTORY MODE: Use Edge Function with album verification
     const form = new FormData()
     form.append('image', file)
     form.append('albumTitle', albumTitle)
@@ -115,6 +112,77 @@ export async function scanRepeatedStickers({
       rawText: json.rawText || '',
       model: json.model || 'process-grid-image',
       missingByPrefix,
+    }
+  } else {
+    // CREATION MODE: Call Gemini directly from client (no album verification needed)
+    const prompt = [
+      `Imagen de álbum: "${albumTitle || 'sin nombre'}"`,
+      'Tu tarea: Extrae TODOS los números o códigos alfanuméricos visibles en esta imagen.',
+      'Ejemplos: números como 1, 2, 15, 42, 100',
+      'Ejemplos con prefijo: T1, T2, T20, E1, E5, E40',
+      'Agrupa los números por su prefijo (si no hay prefijo, usa cadena vacía).',
+      'Responde ÚNICAMENTE con JSON en este formato exacto (sin explicación extra):',
+      '{"missing_by_prefix":[{"prefix":"","numbers":[1,2,3,4,5]},{"prefix":"T","numbers":[1,2,3]}]}',
+    ].join(' ')
+
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent?key=${geminiApiKey}`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          contents: [
+            {
+              parts: [
+                { text: prompt },
+                {
+                  inline_data: {
+                    mime_type: file.type || 'image/jpeg',
+                    data: base64Image,
+                  },
+                },
+              ],
+            },
+          ],
+          generationConfig: {
+            temperature: 0.1,
+            responseMimeType: 'application/json',
+          },
+        }),
+      }
+    )
+
+    if (!response.ok) {
+      const errorText = await response.text()
+      throw new Error(`Gemini API error: ${errorText}`)
+    }
+
+    const data = await response.json()
+    const rawText = data.candidates?.[0]?.content?.parts?.map((part: { text?: string }) => part.text || '').join('') || ''
+
+    try {
+      const parsed = JSON.parse(extractJsonBlock(rawText)) as {
+        missing_by_prefix?: Array<{ prefix?: string; numbers?: number[] }>
+      }
+
+      const missingByPrefix = Array.isArray(parsed.missing_by_prefix)
+        ? parsed.missing_by_prefix.map((g) => ({
+            prefix: String(g.prefix || ''),
+            numbers: Array.isArray(g.numbers) ? g.numbers.map(Number) : [],
+          }))
+        : undefined
+
+      return {
+        detectedNumbers: [],
+        rawText,
+        model: geminiModel,
+        missingByPrefix,
+      }
+    } catch (err) {
+      console.error('Error parsing Gemini response:', err, rawText)
+      throw new Error(`Failed to parse image detection response: ${err instanceof Error ? err.message : 'Unknown error'}`)
     }
   }
 
