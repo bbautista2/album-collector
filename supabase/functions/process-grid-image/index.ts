@@ -204,7 +204,7 @@ serve(async (req: Request) => {
     const allowedPrefixes = (sections || []).map((s: any) => String(s.prefix || ''))
     const validStickerHint = validStickerNumbers.length > 0
       ? `Números válidos del álbum: ${validStickerNumbers.slice(0, 300).join(', ')}.`
-      : 'Si no hay contexto suficiente, devuelve el mejor intento de números visibles.'
+      : 'Si no hay contexto, detecta TODOS los números/códigos visibles en la imagen.'
 
     // Read file as base64
     const ab = await file.arrayBuffer()
@@ -249,14 +249,17 @@ serve(async (req: Request) => {
       return data.candidates?.[0]?.content?.parts?.map((p: any) => p.text || '').join('') || ''
     }
 
+    // Primary prompt: more flexible, aims to detect ALL visible numbers
     const promptPrimary = [
-      `Álbum: ${albumTitle || 'sin nombre'}.`,
-      `Secciones/prefijos: ${sectionSummary || 'sin secciones'}.`,
+      `Imagen de álbum: "${albumTitle || 'sin nombre'}"`,
+      sectionSummary ? `Secciones esperadas: ${sectionSummary}.` : '',
+      'Tu tarea: Extrae TODOS los números o códigos alfanuméricos visibles en esta imagen.',
+      'Ejemplos: números como 1, 2, 15, 42, 100',
+      'Ejemplos con prefijo: T1, T2, T20, E1, E5, E40',
+      'Agrupa los números por su prefijo (si no hay prefijo, usa cadena vacía).',
       validStickerHint,
-      'Analiza la imagen y detecta figuritas faltantes visibles.',
-      'Devuelve SOLO JSON con este formato exacto:',
-      '{"missing_by_prefix":[{"prefix":"","numbers":[1,2]},{"prefix":"T","numbers":[4,10]}]}',
-      'No agregues texto extra fuera del JSON.',
+      'Responde ÚNICAMENTE con JSON en este formato exacto (sin explicación extra):',
+      '{"missing_by_prefix":[{"prefix":"","numbers":[1,2,3,4,5]},{"prefix":"T","numbers":[1,2,3]}]}',
     ].join(' ')
 
     let rawText = ''
@@ -271,16 +274,18 @@ serve(async (req: Request) => {
 
     let normalized = normalizeMissingByPrefix(parsed, validStickerNumbers, allowedPrefixes)
 
-    // Retry with more permissive OCR prompt if nothing was detected
+    // Retry with more aggressive OCR prompt if nothing was detected
     if (!hasDetectedNumbers(normalized)) {
       const promptFallback = [
-        `Álbum: ${albumTitle || 'sin nombre'}.`,
-        `Prefijos permitidos: ${(allowedPrefixes.length ? allowedPrefixes : ['']).join(', ')}.`,
-        validStickerHint,
-        'Segundo intento OCR: identifica todos los códigos o números visibles (por ejemplo T12, 45, E3).',
-        'Convierte esos hallazgos a JSON estricto agrupado por prefijo:',
-        '{"missing_by_prefix":[{"prefix":"","numbers":[]},{"prefix":"T","numbers":[]}]}',
-        'No devuelvas explicación, solo JSON.',
+        `Imagen: ${albumTitle || 'sin nombre'}.`,
+        'SEGUNDA BÚSQUEDA: Lee CUALQUIER número visible en la imagen, incluso si está pequeño, inclinado, o parcial.',
+        'Extrae números individuales: 0-9, 10-99, 100-999, etc.',
+        'Extrae códigos como: T, E, A, B, etc. seguidos de números.',
+        'Ejemplo: Si ves "T" y "15" por separado o juntos, es T15.',
+        'Si ves solo números sin prefijo, agrúpalos bajo prefijo vacío ("").',
+        'Devuelve JSON estricto sin texto adicional:',
+        '{"missing_by_prefix":[{"prefix":"","numbers":[...]},{"prefix":"T","numbers":[...]}]}',
+        'Si NO ves NINGÚN número, devuelve: {"missing_by_prefix":[{"prefix":"","numbers":[]}]}',
       ].join(' ')
 
       try {
@@ -292,12 +297,23 @@ serve(async (req: Request) => {
           normalized = normalizedFallback
           rawText = rawTextFallback
         } else {
-          rawText = `${rawText}\n\n[Fallback]\n${rawTextFallback}`
+          rawText = `${rawText}\n\n[Fallback attempted, no numbers detected]`
         }
-      } catch {
+      } catch (err) {
+        console.error('Fallback OCR failed:', err)
         // keep primary result
       }
     }
+
+    return new Response(JSON.stringify({ ...normalized, rawText, model: GEMINI_MODEL }), {
+      status: 200,
+      headers: {
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'POST, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type, Authorization, apikey, x-client-info',
+      },
+    })
 
     return new Response(JSON.stringify({ ...normalized, rawText, model: GEMINI_MODEL }), {
       status: 200,

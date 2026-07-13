@@ -207,7 +207,7 @@ function AILoadForm({
           )}
 
           {scanError && (
-            <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 whitespace-pre-line">
               {scanError}
             </div>
           )}
@@ -414,25 +414,46 @@ export function CreateAlbumPage() {
       const response = await scanRepeatedStickers({
         file,
         albumTitle: title.trim(),
-        validStickerNumbers: [], // Para AI mode, aceptamos todos los números
+        validStickerNumbers: [], // Para AI mode en creación, aceptamos todos los números
         albumId: undefined,
       })
 
-      if (!response.missingByPrefix || response.missingByPrefix.length === 0) {
-        setScanError('No se detectaron figuritas en la imagen. Intenta con otra foto.')
+      console.log('Scan response:', response)
+
+      // Check if we have any detected data at all
+      if (!response.missingByPrefix) {
+        setScanError('No se pudo procesar la imagen. Por favor intenta con otra foto más clara.')
+        setIsScanning(false)
+        return
+      }
+
+      // Filter out empty sections but keep structure
+      const nonEmptySections = response.missingByPrefix.filter(
+        (s: any) => Array.isArray(s.numbers) && s.numbers.length > 0
+      )
+
+      if (nonEmptySections.length === 0) {
+        setScanError(
+          'No se detectaron números en la imagen. Intenta con:\n' +
+          '• Una foto más clara y bien iluminada\n' +
+          '• Asegúrate de que los números sean legibles\n' +
+          '• Intenta capturar toda la plantilla\n\n' +
+          'Si los números tienen prefijos (T, E, etc.), asegúrate de incluirlos en la foto.'
+        )
         setIsScanning(false)
         return
       }
 
       // Convert missingByPrefix to DetectedSection format
-      const sections = response.missingByPrefix.map((group: any) => ({
+      const sections = nonEmptySections.map((group: any) => ({
         prefix: String(group.prefix || ''),
         numbers: (group.numbers || []).map(Number),
       }))
 
       setDetectedSections(sections)
     } catch (err) {
-      setScanError(err instanceof Error ? err.message : 'Error al escanear la imagen')
+      console.error('Scan error:', err)
+      setScanError(err instanceof Error ? err.message : 'Error al escanear la imagen. Intenta nuevamente.')
     } finally {
       setIsScanning(false)
     }
