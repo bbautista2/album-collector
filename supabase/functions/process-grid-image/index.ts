@@ -105,6 +105,9 @@ serve(async (req: Request) => {
       return new Response(JSON.stringify({ error: 'Falta albumId' }), { status: 400, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } })
     }
 
+    // Debug: log the values we're querying with
+    console.log('Query debug:', { userId, albumId })
+
     // Verify the user owns this album (using service role)
     const { data: album, error: albumError } = await supabaseServiceRole
       .from('albums')
@@ -112,8 +115,11 @@ serve(async (req: Request) => {
       .eq('id', albumId)
       .single()
 
+    console.log('Album query result:', { album, albumError })
+
     if (albumError || !album) {
-      return new Response(JSON.stringify({ error: 'Álbum no encontrado' }), { status: 404, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } })
+      console.error('Album error details:', albumError)
+      return new Response(JSON.stringify({ error: 'Álbum no encontrado', debug: { errorMsg: albumError?.message, albumId } }), { status: 404, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } })
     }
 
     if (album.user_id !== userId) {
