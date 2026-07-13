@@ -64,6 +64,7 @@ export async function scanRepeatedStickers({
   file,
   albumTitle,
   validStickerNumbers,
+  albumId,
 }: ScanRepeatedInput): Promise<ScanRepeatedResponse> {
   if (!geminiApiKey) {
     throw new Error('Falta `VITE_GEMINI_API_KEY` en tus variables de entorno')
@@ -77,11 +78,17 @@ export async function scanRepeatedStickers({
 
   // If configured, call the server-side Edge Function which will handle the prompt and Gemini call
   if (useProcessFunction) {
+    if (!albumId) {
+      throw new Error('Falta albumId para procesar la imagen')
+    }
+
     const form = new FormData()
     form.append('image', file)
     form.append('albumTitle', albumTitle)
     form.append('validStickerNumbers', JSON.stringify(validStickerNumbers))
+    form.append('albumId', String(albumId))
 
+    // supabase.functions.invoke automatically adds the Authorization header with the user's JWT
     const res = await supabase.functions.invoke('process-grid-image', { body: form })
     if (!res || !res.data) {
       throw new Error('La función de procesamiento no devolvió datos')

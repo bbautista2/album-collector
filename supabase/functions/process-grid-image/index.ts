@@ -13,9 +13,27 @@ const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || '
 const GEMINI_API_KEY = Deno.env.get('GEMINI_API_KEY') || ''
 const GEMINI_MODEL = Deno.env.get('GEMINI_MODEL') || 'gemini-2.0-flash'
 
-const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+// Create service role client for admin operations (verify album ownership)
+const supabaseServiceRole = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
   global: { headers: { 'x-client-info': 'process-grid-image' } },
 })
+
+// Extract user from JWT token
+function extractUserFromJWT(authHeader: string | null): string | null {
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return null
+  }
+  const token = authHeader.substring(7)
+  try {
+    // Decode JWT payload (middle part)
+    const parts = token.split('.')
+    if (parts.length !== 3) return null
+    const payload = JSON.parse(atob(parts[1]))
+    return payload.sub || null // 'sub' is the user ID in Supabase JWTs
+  } catch {
+    return null
+  }
+}
 
 async function fileToBase64FromBuffer(buffer: ArrayBuffer, mime = 'image/jpeg') {
   // Deno btoa expects a string; convert bytes to binary string
@@ -30,10 +48,47 @@ async function fileToBase64FromBuffer(buffer: ArrayBuffer, mime = 'image/jpeg') 
 }
 
 serve(async (req: Request) => {
+  // Handle CORS preflight requests
+  if (req.method === 'OPTIONS') {
+    return new Response(null, {
+      status: 204,
+      headers: {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'POST, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type, Authorization, apikey, x-client-info',
+        'Access-Control-Max-Age': '86400',
+      },
+    })
+  }
+
+  // Only allow POST requests
+  if (req.method !== 'POST') {
+    return new Response(JSON.stringify({ error: 'Method not allowed' }), {
+      status: 405,
+      headers: {
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': '*',
+      },
+    })
+  }
+
   try {
+    // Extract user from Authorization header
+    const authHeader = req.headers.get('authorization')
+    const userId = extractUserFromJWT(authHeader)
+
+    if (!userId) {
+      return new Response(JSON.stringify({ error: 'Missing or invalid authorization' }), {
+        status: 401,
+        headers: {
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*',
+        },
+      })
+    }
     const contentType = req.headers.get('content-type') || ''
     if (!contentType.includes('form-data')) {
-      return new Response(JSON.stringify({ error: 'Se requiere multipart/form-data' }), { status: 400 })
+      return new Response(JSON.stringify({ error: 'Se requiere multipart/form-data' }), { status: 400, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } })
     }
 
     const form = await req.formData()
@@ -43,22 +98,37 @@ serve(async (req: Request) => {
     const file = form.get('image') as File | null
 
     if (!file) {
-      return new Response(JSON.stringify({ error: 'No se envió imagen' }), { status: 400 })
+      return new Response(JSON.stringify({ error: 'No se envió imagen' }), { status: 400, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } })
     }
 
     if (!albumId) {
-      return new Response(JSON.stringify({ error: 'Falta albumId' }), { status: 400 })
+      return new Response(JSON.stringify({ error: 'Falta albumId' }), { status: 400, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } })
+    }
+
+    // Verify the user owns this album (using service role)
+    const { data: album, error: albumError } = await supabaseServiceRole
+      .from('albums')
+      .select('id, user_id')
+      .eq('id', albumId)
+      .single()
+
+    if (albumError || !album) {
+      return new Response(JSON.stringify({ error: 'Álbum no encontrado' }), { status: 404, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } })
+    }
+
+    if (album.user_id !== userId) {
+      return new Response(JSON.stringify({ error: 'No tienes permiso para procesar este álbum' }), { status: 403, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } })
     }
 
     // Fetch sections for the album
-    const { data: sections, error: sectionsError } = await supabase
+    const { data: sections, error: sectionsError } = await supabaseServiceRole
       .from('album_sections')
       .select('id, name, prefix, total_stickers')
       .eq('album_id', albumId)
       .order('id', { ascending: true })
 
     if (sectionsError) {
-      return new Response(JSON.stringify({ error: sectionsError.message }), { status: 500 })
+      return new Response(JSON.stringify({ error: sectionsError.message }), { status: 500, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } })
     }
 
     const sectionSummary = (sections || [])
@@ -103,7 +173,7 @@ serve(async (req: Request) => {
 
     if (!resp.ok) {
       const text = await resp.text()
-      return new Response(JSON.stringify({ error: text }), { status: resp.status })
+      return new Response(JSON.stringify({ error: text }), { status: resp.status, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } })
     }
 
     const data = await resp.json()
@@ -131,9 +201,14 @@ serve(async (req: Request) => {
 
     return new Response(JSON.stringify({ ...(parsed || {}), rawText, model: GEMINI_MODEL }), {
       status: 200,
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'POST, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type, Authorization, apikey, x-client-info',
+      },
     })
   } catch (err: any) {
-    return new Response(JSON.stringify({ error: err?.message || String(err) }), { status: 500 })
+    return new Response(JSON.stringify({ error: err?.message || String(err) }), { status: 500, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } })
   }
 })
