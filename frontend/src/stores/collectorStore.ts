@@ -12,7 +12,7 @@ interface CollectorStore {
   fetchAlbums: () => Promise<void>
   fetchUserAlbums: (userId: string) => Promise<void>
   fetchUserStickers: (userId: string) => Promise<void>
-  activateAlbum: (userId: string, albumId: string) => Promise<void>
+  activateAlbum: (userId: string, albumId: string) => Promise<boolean>
   deactivateAlbum: (userId: string, albumId: string) => Promise<void>
   createAlbum: (userId: string, album: AlbumCreationInput) => Promise<string | null>
   updateStickerQuantity: (
@@ -84,25 +84,43 @@ export const useCollectorStore = create<CollectorStore>((set) => ({
   activateAlbum: async (userId, albumId) => {
     set({ isLoading: true, error: null })
     try {
-      const { error } = await supabase.from('user_albums').insert({
-        user_id: userId,
-        album_id: albumId,
-      })
-      if (error) throw error
-      set((state) => ({
-        userAlbums: [
-          ...state.userAlbums,
+      const { data, error } = await supabase
+        .from('user_albums')
+        .upsert(
           {
-            id: '',
             user_id: userId,
             album_id: albumId,
-            activated_at: new Date().toISOString(),
           },
-        ],
-      }))
+          { onConflict: 'user_id,album_id' }
+        )
+        .select('*')
+        .single()
+
+      if (error) throw error
+
+      set((state) => {
+        const nextUserAlbums = state.userAlbums.filter(
+          (ua) => !(ua.user_id === userId && ua.album_id === albumId)
+        )
+
+        return {
+          userAlbums: [
+            ...nextUserAlbums,
+            data || {
+              id: '',
+              user_id: userId,
+              album_id: albumId,
+              activated_at: new Date().toISOString(),
+            },
+          ],
+        }
+      })
+
+      return true
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to activate album'
       set({ error: errorMessage })
+      return false
     } finally {
       set({ isLoading: false })
     }

@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuthStore } from '../stores/authStore'
 import { supabase } from '../lib/supabase'
 import { scanRepeatedStickers } from '../lib/repeatedScanner'
+import { AlbumStickerGrid } from '../components/AlbumStickerGrid'
 import type { Album, DetectedStickerNumber, ExchangeCommitment, Sticker, UserSticker } from '../types'
 
 type ScanMode = 'repeated' | 'missing'
@@ -10,14 +11,16 @@ type ScanMode = 'repeated' | 'missing'
 export function AlbumPage() {
   const { albumId } = useParams()
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
   const { user } = useAuthStore()
+  const scanPanelRef = useRef<HTMLDivElement | null>(null)
   const [album, setAlbum] = useState<Album | null>(null)
   const [stickers, setStickers] = useState<Sticker[]>([])
   const [sections, setSections] = useState<import('../types').AlbumSection[]>([])
   const [userStickers, setUserStickers] = useState<Map<string, UserSticker>>(new Map())
   const [isLoading, setIsLoading] = useState(true)
   const [scanFile, setScanFile] = useState<File | null>(null)
-  const [scanMode, setScanMode] = useState<ScanMode>('repeated')
+  const [scanMode, setScanMode] = useState<ScanMode>('missing')
   const [scanLoading, setScanLoading] = useState(false)
   const [scanError, setScanError] = useState<string | null>(null)
   const [scanResults, setScanResults] = useState<DetectedStickerNumber[]>([])
@@ -101,60 +104,14 @@ export function AlbumPage() {
     fetchData()
   }, [user, albumId, navigate])
 
-  const upsertStickerState = async (stickerId: string, quantityOwned: number, quantityRepeated: number) => {
-    if (!user) {
-      return
+  useEffect(() => {
+    if (searchParams.get('scan') === '1') {
+      setScanMode('missing')
+      requestAnimationFrame(() => {
+        scanPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      })
     }
-
-    const safeOwned = Math.max(0, quantityOwned)
-    const safeRepeated = Math.max(0, Math.min(quantityRepeated, safeOwned))
-
-    const { error } = await supabase.from('user_stickers').upsert(
-      {
-        user_id: user.id,
-        sticker_id: stickerId,
-        quantity_owned: safeOwned,
-        quantity_repeated: safeRepeated,
-      },
-      { onConflict: 'user_id,sticker_id' }
-    )
-
-    if (error) {
-      throw error
-    }
-
-    const existing = userStickers.get(stickerId)
-    const updated = new Map(userStickers)
-    updated.set(stickerId, {
-      id: existing?.id || '',
-      user_id: user.id,
-      sticker_id: stickerId,
-      quantity_owned: safeOwned,
-      quantity_repeated: safeRepeated,
-      updated_at: new Date().toISOString(),
-    })
-    setUserStickers(updated)
-  }
-
-  const handleQuantityChange = async (stickerId: string, quantity: number) => {
-    try {
-      const existing = userStickers.get(stickerId)
-      const repeated = Math.min(existing?.quantity_repeated || 0, Math.max(0, quantity || 0))
-      await upsertStickerState(stickerId, quantity || 0, repeated)
-    } catch (error) {
-      console.error('Error updating sticker:', error)
-    }
-  }
-
-  const handleRepeatedChange = async (stickerId: string, repeated: number) => {
-    try {
-      const existing = userStickers.get(stickerId)
-      const owned = existing?.quantity_owned || 0
-      await upsertStickerState(stickerId, owned, Math.min(repeated || 0, owned))
-    } catch (error) {
-      console.error('Error updating sticker:', error)
-    }
-  }
+  }, [searchParams])
 
   const handleScanRepeated = async () => {
     if (!scanFile || !album || !user) {
@@ -356,9 +313,16 @@ export function AlbumPage() {
     }
   }
 
-  const ownedCount = Array.from(userStickers.values()).filter((us) => us.quantity_owned > 0)
-    .length
+  const ownedCount = useMemo(
+    () => Array.from(userStickers.values()).filter((us) => us.quantity_owned > 0).length,
+    [userStickers]
+  )
   const totalCount = stickers.length
+  const scanActionLabel = scanMode === 'missing' ? 'Escanear faltantes' : 'Escanear repetidas'
+  const scanModeHint =
+    scanMode === 'missing'
+      ? 'Escanea tu grilla para registrar las figuritas que ya conseguiste y visualizar las faltantes.'
+      : 'Escanea una foto de tus repetidas para actualizar tu inventario automáticamente.'
 
   return (
     <div className="space-y-6">
@@ -375,19 +339,19 @@ export function AlbumPage() {
         </button>
       </div>
 
-      <div className="bg-primary-50 p-4 rounded-lg">
+      <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
         <p className="text-sm text-gray-700">
           Has obtenido <strong>{ownedCount}</strong> de <strong>{totalCount}</strong> figuras (
           {totalCount > 0 ? Math.round((ownedCount / totalCount) * 100) : 0}%)
         </p>
       </div>
 
-      <div className="rounded-lg border border-orange-200 bg-white p-5 shadow-sm">
+      <div ref={scanPanelRef} className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
         <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
           <div className="space-y-2">
-            <h2 className="text-xl font-semibold text-gray-900">Escaneo de grilla con IA</h2>
+            <h2 className="text-xl font-semibold text-gray-900">Escanear mis figuras faltantes</h2>
             <p className="text-sm text-gray-600">
-              Puedes escanear repetidas o figuritas faltantes que acabas de conseguir para actualizar tu inventario automáticamente.
+              {scanModeHint}
             </p>
           </div>
 
@@ -401,9 +365,9 @@ export function AlbumPage() {
             <button
               onClick={handleScanRepeated}
               disabled={!scanFile || scanLoading}
-              className="rounded-lg bg-orange-500 px-4 py-2 font-semibold text-white transition hover:bg-orange-600 disabled:cursor-not-allowed disabled:opacity-50"
+              className="rounded-xl bg-slate-900 px-4 py-2 font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {scanLoading ? 'Analizando imagen...' : 'Escanear repetidas'}
+              {scanLoading ? 'Analizando imagen...' : scanActionLabel}
             </button>
           </div>
         </div>
@@ -413,21 +377,21 @@ export function AlbumPage() {
             onClick={() => setScanMode('repeated')}
             className={`rounded-full px-3 py-1 text-xs font-semibold ${
               scanMode === 'repeated'
-                ? 'bg-orange-500 text-white'
-                : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                ? 'bg-slate-900 text-white'
+                : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
             }`}
           >
-            Escanear repetidas
+            Ver repetidas
           </button>
           <button
             onClick={() => setScanMode('missing')}
             className={`rounded-full px-3 py-1 text-xs font-semibold ${
               scanMode === 'missing'
                 ? 'bg-emerald-600 text-white'
-                : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
             }`}
           >
-            Escanear faltantes conseguidas
+            Ver faltantes
           </button>
         </div>
 
@@ -493,65 +457,7 @@ export function AlbumPage() {
       {isLoading ? (
         <div className="text-center py-8 text-gray-500">Cargando figuras...</div>
       ) : (
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-          {stickers.map((sticker) => {
-            const userSticker = userStickers.get(sticker.id)
-            const owned = userSticker?.quantity_owned || 0
-            const repeated = userSticker?.quantity_repeated || 0
-
-            return (
-              <div
-                key={sticker.id}
-                className={`p-4 rounded-lg border-2 transition ${
-                  owned > 0
-                    ? 'border-green-400 bg-green-50'
-                    : 'border-gray-200 bg-white hover:border-gray-300'
-                }`}
-              >
-                <div className="aspect-square bg-gray-100 rounded-md mb-2 flex items-center justify-center">
-                  <span className="text-2xl">#{sticker.sticker_number}</span>
-                </div>
-
-                <p className="text-xs text-gray-600 mb-2 truncate">{sticker.name}</p>
-                {sticker.category_or_team && (
-                  <p className="text-xs text-primary-600 mb-2">{sticker.category_or_team}</p>
-                )}
-
-                <div className="space-y-2">
-                  <div>
-                    <label className="text-xs text-gray-600">
-                      Tengo: <strong>{owned}</strong>
-                    </label>
-                    <input
-                      type="number"
-                      min="0"
-                      max="10"
-                      value={owned}
-                        onChange={(e) => handleQuantityChange(sticker.id, parseInt(e.target.value || '0', 10))}
-                      className="w-full px-2 py-1 border border-gray-300 rounded text-xs"
-                    />
-                  </div>
-
-                  {owned > 0 && (
-                    <div>
-                      <label className="text-xs text-gray-600">
-                        Repetidas: <strong>{repeated}</strong>
-                      </label>
-                      <input
-                        type="number"
-                        min="0"
-                        max={owned}
-                        value={repeated}
-                          onChange={(e) => handleRepeatedChange(sticker.id, parseInt(e.target.value || '0', 10))}
-                        className="w-full px-2 py-1 border border-orange-300 rounded text-xs bg-orange-50"
-                      />
-                    </div>
-                  )}
-                </div>
-              </div>
-            )
-          })}
-        </div>
+        <AlbumStickerGrid stickers={stickers} userStickers={userStickers} />
       )}
     </div>
   )

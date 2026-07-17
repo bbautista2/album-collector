@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuthStore } from '../stores/authStore'
 import { useCollectorStore } from '../stores/collectorStore'
@@ -7,6 +7,7 @@ export function DashboardPage() {
   const { user } = useAuthStore()
   const navigate = useNavigate()
   const { albums, userAlbums, fetchAlbums, fetchUserAlbums, activateAlbum, isLoading } = useCollectorStore()
+  const [activatingAlbumId, setActivatingAlbumId] = useState<string | null>(null)
 
   useEffect(() => {
     if (!user) {
@@ -19,6 +20,23 @@ export function DashboardPage() {
   }, [user, navigate, fetchAlbums, fetchUserAlbums])
 
   const userAlbumIds = userAlbums.map((ua) => ua.album_id)
+
+  const handleActivateAlbum = async (albumId: string) => {
+    if (!user) {
+      navigate('/login')
+      return
+    }
+
+    setActivatingAlbumId(albumId)
+    try {
+      const activated = await activateAlbum(user.id, albumId)
+      if (activated) {
+        navigate(`/album/${albumId}?scan=1`)
+      }
+    } finally {
+      setActivatingAlbumId(null)
+    }
+  }
 
   return (
     <div className="space-y-8">
@@ -113,11 +131,11 @@ export function DashboardPage() {
                       </div>
                     ) : (
                       <button
-                        onClick={() => activateAlbum(user!.id, album.id)}
-                        disabled={isLoading}
+                        onClick={() => handleActivateAlbum(album.id)}
+                        disabled={isLoading || activatingAlbumId === album.id}
                         className="w-full bg-gray-300 text-gray-700 py-2 rounded-lg font-semibold hover:bg-gray-400 transition disabled:opacity-50"
                       >
-                        Activar Álbum
+                        {activatingAlbumId === album.id ? 'Activando...' : 'Activar y escanear'}
                       </button>
                     )}
                   </div>
