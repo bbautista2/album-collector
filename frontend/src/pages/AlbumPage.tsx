@@ -16,6 +16,7 @@ interface ScannedStickerCandidate {
   displayCode: string
   displayName: string
   count: number
+  adjustedCount: number
   selected: boolean
   mapped: boolean
 }
@@ -185,6 +186,7 @@ export function AlbumPage() {
         displayCode,
         displayName: `Figurita ${displayCode}`,
         count: 1,
+        adjustedCount: 1,
         selected: true,
         mapped: false,
       }
@@ -198,6 +200,7 @@ export function AlbumPage() {
       displayCode,
       displayName: sticker.name,
       count: 1,
+      adjustedCount: 1,
       selected: true,
       mapped: true,
     }
@@ -368,6 +371,14 @@ export function AlbumPage() {
     )
   }
 
+  const updateCandidateCount = (key: string, newCount: number) => {
+    setScanCandidates((current) =>
+      current.map((candidate) =>
+        candidate.key === key ? { ...candidate, adjustedCount: newCount } : candidate
+      )
+    )
+  }
+
   const saveSelectedScanCandidates = async () => {
     if (!user) {
       return
@@ -437,8 +448,9 @@ export function AlbumPage() {
         selectedMapped.forEach((candidate) => {
           const stickerId = candidate.stickerId as string
           const existing = userStickers.get(stickerId)
-          const nextRepeated = (existing?.quantity_repeated || 0) + candidate.count
-          const nextOwned = Math.max((existing?.quantity_owned || 0) + candidate.count, nextRepeated + 1)
+          const addCount = candidate.adjustedCount > 0 ? candidate.adjustedCount : candidate.count
+          const nextRepeated = (existing?.quantity_repeated || 0) + addCount
+          const nextOwned = Math.max((existing?.quantity_owned || 0) + addCount, nextRepeated + 1)
 
           updatesByStickerId.set(stickerId, {
             user_id: user.id,
@@ -529,13 +541,15 @@ export function AlbumPage() {
 
             const existingCandidate = candidateMap.get(candidate.key)
             if (!existingCandidate) {
-              candidateMap.set(candidate.key, candidate)
+              candidateMap.set(candidate.key, { ...candidate, adjustedCount: candidate.count })
               return
             }
 
+            const nextCount = existingCandidate.count + 1
             candidateMap.set(candidate.key, {
               ...existingCandidate,
-              count: existingCandidate.count + 1,
+              count: nextCount,
+              adjustedCount: nextCount,
             })
           })
         })
@@ -568,6 +582,7 @@ export function AlbumPage() {
           return {
             ...candidate,
             count: item.count,
+            adjustedCount: item.count,
           }
         })
         .filter((item): item is ScannedStickerCandidate => item !== null)
@@ -836,37 +851,74 @@ export function AlbumPage() {
             )}
 
             <div className="grid grid-cols-2 gap-2 md:grid-cols-3 lg:grid-cols-4">
-              {scanCandidates.map((candidate) => (
-                <label
-                  key={candidate.key}
-                  className={`cursor-pointer rounded-xl border p-3 transition ${
-                    candidate.selected
-                      ? 'border-emerald-300 bg-emerald-50'
-                      : 'border-slate-200 bg-white'
-                  }`}
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <div>
-                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                        {candidate.mapped ? 'Mapeada' : 'Sin mapeo'}
-                      </p>
-                      <p className="mt-1 text-lg font-black text-slate-900">#{candidate.stickerNumber}</p>
-                      <p className="text-xs text-slate-500">{candidate.displayCode}</p>
-                    </div>
-                    <input
-                      type="checkbox"
-                      checked={candidate.selected}
-                      onChange={() => toggleScanCandidate(candidate.key)}
-                      className="mt-1 h-4 w-4 rounded border-slate-300 text-emerald-600"
-                    />
-                  </div>
+              {scanCandidates.map((candidate) => {
+                const existingEntry = candidate.stickerId ? userStickers.get(candidate.stickerId) : undefined
+                const existingRepeated = existingEntry?.quantity_repeated || 0
+                const isRepeatedMode = scanMode === 'repeated'
+                const maxDropdown = Math.max(candidate.adjustedCount, 20)
 
-                  <p className="mt-2 truncate text-xs text-slate-700">{candidate.displayName}</p>
-                  {candidate.count > 1 ? (
-                    <p className="mt-1 text-[11px] font-semibold text-slate-500">Detectada × {candidate.count}</p>
-                  ) : null}
-                </label>
-              ))}
+                return (
+                  <div
+                    key={candidate.key}
+                    className={`rounded-xl border p-3 transition ${
+                      candidate.selected
+                        ? isRepeatedMode
+                          ? 'border-violet-300 bg-violet-50'
+                          : 'border-emerald-300 bg-emerald-50'
+                        : 'border-slate-200 bg-white'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0 flex-1">
+                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                          {candidate.mapped ? (isRepeatedMode ? 'Repetida' : 'Mapeada') : 'Sin mapeo'}
+                        </p>
+                        <p className="mt-1 text-lg font-black text-slate-900">#{candidate.stickerNumber}</p>
+                        <p className="text-xs text-slate-500">{candidate.displayCode}</p>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={candidate.selected}
+                        onChange={() => toggleScanCandidate(candidate.key)}
+                        className="mt-1 h-4 w-4 shrink-0 rounded border-slate-300 accent-violet-600"
+                      />
+                    </div>
+
+                    <p className="mt-2 truncate text-xs text-slate-700">{candidate.displayName}</p>
+
+                    {isRepeatedMode ? (
+                      <div className="mt-2 space-y-1">
+                        {existingRepeated > 0 && (
+                          <p className="text-[11px] text-slate-500">
+                            Ya tenés <strong>{existingRepeated}</strong> repetida{existingRepeated !== 1 ? 's' : ''}
+                          </p>
+                        )}
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-[11px] text-slate-500">Agregar:</span>
+                          <select
+                            value={candidate.adjustedCount}
+                            onChange={(e) => updateCandidateCount(candidate.key, Number(e.target.value))}
+                            onClick={(e) => e.stopPropagation()}
+                            disabled={!candidate.selected}
+                            className="rounded border border-slate-300 bg-white px-1 py-0.5 text-xs font-semibold text-slate-800 disabled:opacity-40"
+                          >
+                            {Array.from({ length: maxDropdown }, (_, i) => i + 1).map((n) => (
+                              <option key={n} value={n}>{n}</option>
+                            ))}
+                          </select>
+                        </div>
+                        <p className="text-[11px] font-semibold text-violet-700">
+                          Total tras guardar: {existingRepeated + candidate.adjustedCount}
+                        </p>
+                      </div>
+                    ) : (
+                      candidate.count > 1 ? (
+                        <p className="mt-1 text-[11px] font-semibold text-slate-500">Detectada × {candidate.count}</p>
+                      ) : null
+                    )}
+                  </div>
+                )
+              })}
             </div>
           </div>
         )}
