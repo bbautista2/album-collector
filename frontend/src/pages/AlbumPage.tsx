@@ -395,30 +395,70 @@ export function AlbumPage() {
         return
       }
 
-      const updates = selectedMapped.map((candidate) => {
-        const stickerId = candidate.stickerId as string
-        const existing = userStickers.get(stickerId)
+      const updatesByStickerId = new Map<string, {
+        user_id: string
+        sticker_id: string
+        quantity_owned: number
+        quantity_repeated: number
+      }>()
 
-        if (scanMode === 'missing') {
-          const nextOwned = Math.max(existing?.quantity_owned || 0, 0) + candidate.count
-          return {
+      if (scanMode === 'missing') {
+        const currentMissingIds = new Set(selectedMapped.map((candidate) => candidate.stickerId as string))
+        const albumStickerIds = new Set(stickers.map((sticker) => sticker.id))
+
+        selectedMapped.forEach((candidate) => {
+          const stickerId = candidate.stickerId as string
+          updatesByStickerId.set(stickerId, {
+            user_id: user.id,
+            sticker_id: stickerId,
+            quantity_owned: 0,
+            quantity_repeated: 0,
+          })
+        })
+
+        userStickers.forEach((existing, stickerId) => {
+          if (!albumStickerIds.has(stickerId)) {
+            return
+          }
+
+          const wasMarkedMissing = (existing.quantity_owned || 0) === 0
+          const stillMissing = currentMissingIds.has(stickerId)
+
+          if (wasMarkedMissing && !stillMissing) {
+            updatesByStickerId.set(stickerId, {
+              user_id: user.id,
+              sticker_id: stickerId,
+              quantity_owned: 1,
+              quantity_repeated: 0,
+            })
+          }
+        })
+      } else {
+        selectedMapped.forEach((candidate) => {
+          const stickerId = candidate.stickerId as string
+          const existing = userStickers.get(stickerId)
+          const nextRepeated = (existing?.quantity_repeated || 0) + candidate.count
+          const nextOwned = Math.max((existing?.quantity_owned || 0) + candidate.count, nextRepeated + 1)
+
+          updatesByStickerId.set(stickerId, {
             user_id: user.id,
             sticker_id: stickerId,
             quantity_owned: nextOwned,
-            quantity_repeated: Math.min(existing?.quantity_repeated || 0, nextOwned),
-          }
-        }
+            quantity_repeated: nextRepeated,
+          })
+        })
+      }
 
-        const nextRepeated = (existing?.quantity_repeated || 0) + candidate.count
-        const nextOwned = Math.max((existing?.quantity_owned || 0) + candidate.count, nextRepeated + 1)
+      const updates = Array.from(updatesByStickerId.values())
 
-        return {
-          user_id: user.id,
-          sticker_id: stickerId,
-          quantity_owned: nextOwned,
-          quantity_repeated: nextRepeated,
-        }
-      })
+      if (updates.length === 0) {
+        setScanError(
+          scanMode === 'missing'
+            ? 'No hubo cambios para sincronizar en faltantes.'
+            : 'No hay cambios para guardar.'
+        )
+        return
+      }
 
       const { error } = await supabase.from('user_stickers').upsert(updates, {
         onConflict: 'user_id,sticker_id',
@@ -608,10 +648,45 @@ export function AlbumPage() {
   const scanActionLabel = scanMode === 'missing' ? 'Escanear faltantes' : 'Escanear repetidas'
   const scanModeHint =
     scanMode === 'missing'
-      ? 'Escanea tu grilla para registrar las figuritas que ya conseguiste y visualizar las faltantes.'
+      ? 'Escanea tu grilla para detectar figuritas faltantes y marcarlas como no obtenidas.'
       : 'Escanea una foto de tus repetidas para actualizar tu inventario automáticamente.'
   const selectedCandidateCount = scanCandidates.filter((candidate) => candidate.selected).length
   const unmappedCandidateCount = scanCandidates.filter((candidate) => !candidate.mapped).length
+  const stickerById = useMemo(() => new Map(stickers.map((sticker) => [sticker.id, sticker])), [stickers])
+  const missingSyncSummary = useMemo(() => {
+    if (scanMode !== 'missing') {
+      return null
+    }
+
+    const albumStickerIds = new Set(stickers.map((sticker) => sticker.id))
+    const currentMissingIds = new Set<string>()
+
+    userStickers.forEach((entry, stickerId) => {
+      if (!albumStickerIds.has(stickerId)) {
+        return
+      }
+
+      if ((entry.quantity_owned || 0) === 0) {
+        currentMissingIds.add(stickerId)
+      }
+    })
+
+    const nextMissingIds = new Set(
+      scanCandidates
+        .filter((candidate) => candidate.selected && candidate.mapped && candidate.stickerId)
+        .map((candidate) => candidate.stickerId as string)
+    )
+
+    const addedIds = Array.from(nextMissingIds).filter((id) => !currentMissingIds.has(id))
+    const removedIds = Array.from(currentMissingIds).filter((id) => !nextMissingIds.has(id))
+    const unchangedIds = Array.from(nextMissingIds).filter((id) => currentMissingIds.has(id))
+
+    return {
+      addedIds,
+      removedIds,
+      unchangedIds,
+    }
+  }, [scanMode, scanCandidates, stickers, userStickers])
 
   return (
     <div className="space-y-6">
@@ -720,6 +795,45 @@ export function AlbumPage() {
                 {saveScanLoading ? 'Guardando...' : 'Confirmar y guardar'}
               </button>
             </div>
+
+            {scanMode === 'missing' && missingSyncSummary && (
+              <div className="rounded-xl border border-amber-200 bg-amber-50 p-3">
+                <p className="text-xs font-semibold uppercase tracking-wide text-amber-700">Resumen de sincronización</p>
+                <p className="mt-1 text-sm text-amber-900">
+                  Se agregan <strong>{missingSyncSummary.addedIds.length}</strong>, se quitan{' '}
+                  <strong>{missingSyncSummary.removedIds.length}</strong> y se mantienen{' '}
+                  <strong>{missingSyncSummary.unchangedIds.length}</strong> faltantes.
+                </p>
+
+                {missingSyncSummary.addedIds.length > 0 && (
+                  <p className="mt-1 text-xs text-amber-800">
+                    Nuevas faltantes:{' '}
+                    {missingSyncSummary.addedIds
+                      .slice(0, 6)
+                      .map((id) => {
+                        const sticker = stickerById.get(id)
+                        return sticker ? `#${sticker.sticker_number}` : id
+                      })
+                      .join(', ')}
+                    {missingSyncSummary.addedIds.length > 6 ? '…' : ''}
+                  </p>
+                )}
+
+                {missingSyncSummary.removedIds.length > 0 && (
+                  <p className="mt-1 text-xs text-amber-800">
+                    Ya no aparecen (se marcarán obtenidas):{' '}
+                    {missingSyncSummary.removedIds
+                      .slice(0, 6)
+                      .map((id) => {
+                        const sticker = stickerById.get(id)
+                        return sticker ? `#${sticker.sticker_number}` : id
+                      })
+                      .join(', ')}
+                    {missingSyncSummary.removedIds.length > 6 ? '…' : ''}
+                  </p>
+                )}
+              </div>
+            )}
 
             <div className="grid grid-cols-2 gap-2 md:grid-cols-3 lg:grid-cols-4">
               {scanCandidates.map((candidate) => (
