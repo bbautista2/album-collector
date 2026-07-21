@@ -20,6 +20,17 @@ interface ScannedStickerCandidate {
   mapped: boolean
 }
 
+const normalizePrefixToken = (value: string | null | undefined): string =>
+  (value || '').toLowerCase().replace(/[^a-z0-9]/g, '')
+
+const normalizeCodeToken = (value: string | null | undefined): string =>
+  (value || '').toLowerCase().replace(/[^a-z0-9]/g, '')
+
+const extractPrefixFromStickerName = (name: string): string => {
+  const match = name.trim().match(/^([^\d]+?)[\s\-_.]*\d+$/)
+  return match?.[1] || ''
+}
+
 export function AlbumPage() {
   const { albumId } = useParams()
   const navigate = useNavigate()
@@ -127,8 +138,8 @@ export function AlbumPage() {
   }, [searchParams])
 
   const mapStickerCandidate = (prefix: string, number: number): ScannedStickerCandidate | null => {
-    const normalizedPrefix = (prefix || '').trim().toLowerCase()
-    const section = sections.find((s) => (s.prefix || '').trim().toLowerCase() === normalizedPrefix)
+    const normalizedPrefix = normalizePrefixToken(prefix)
+    const section = sections.find((s) => normalizePrefixToken(s.prefix) === normalizedPrefix)
 
     let sticker: Sticker | undefined
 
@@ -138,10 +149,28 @@ export function AlbumPage() {
 
     if (!sticker) {
       const byNumber = stickers.filter((st) => st.sticker_number === number)
-      if (byNumber.length === 1) {
+
+      if (normalizedPrefix) {
+        sticker = byNumber.find((st) => {
+          const stickerSection = sections.find((sectionItem) => sectionItem.id === st.section_id)
+          return normalizePrefixToken(stickerSection?.prefix) === normalizedPrefix
+        })
+      }
+
+      if (!sticker && byNumber.length === 1) {
         sticker = byNumber[0]
-      } else if (byNumber.length > 1 && normalizedPrefix) {
-        sticker = byNumber.find((st) => st.name.toLowerCase().startsWith(normalizedPrefix))
+      }
+
+      if (!sticker && byNumber.length > 1 && normalizedPrefix) {
+        sticker = byNumber.find((st) => {
+          const prefixFromName = extractPrefixFromStickerName(st.name)
+          return normalizePrefixToken(prefixFromName) === normalizedPrefix
+        })
+      }
+
+      if (!sticker && normalizedPrefix) {
+        const normalizedExpectedCode = `${normalizedPrefix}${number}`
+        sticker = stickers.find((st) => normalizeCodeToken(st.name) === normalizedExpectedCode)
       }
     }
 
@@ -195,11 +224,11 @@ export function AlbumPage() {
     let nextSections = [...sections]
     let nextStickers = [...stickers]
     const sectionByPrefix = new Map(
-      nextSections.map((section) => [(section.prefix || '').trim().toLowerCase(), section])
+      nextSections.map((section) => [normalizePrefixToken(section.prefix), section])
     )
 
     const requiredPrefixes = Array.from(
-      new Set(selectedUnmapped.map((candidate) => (candidate.detectedPrefix || '').trim().toLowerCase()))
+      new Set(selectedUnmapped.map((candidate) => normalizePrefixToken(candidate.detectedPrefix)))
     )
 
     for (const normalizedPrefix of requiredPrefixes) {
@@ -208,7 +237,7 @@ export function AlbumPage() {
       }
 
       const rawPrefix = selectedUnmapped.find(
-        (candidate) => (candidate.detectedPrefix || '').trim().toLowerCase() === normalizedPrefix
+        (candidate) => normalizePrefixToken(candidate.detectedPrefix) === normalizedPrefix
       )?.detectedPrefix || ''
 
       const sectionName = rawPrefix.trim()
@@ -232,13 +261,13 @@ export function AlbumPage() {
 
       if (newSection) {
         nextSections = [...nextSections, newSection]
-        sectionByPrefix.set((newSection.prefix || '').trim().toLowerCase(), newSection)
+        sectionByPrefix.set(normalizePrefixToken(newSection.prefix), newSection)
       }
     }
 
     const groupedByPrefix = new Map<string, ScannedStickerCandidate[]>()
     selectedUnmapped.forEach((candidate) => {
-      const key = (candidate.detectedPrefix || '').trim().toLowerCase()
+      const key = normalizePrefixToken(candidate.detectedPrefix)
       const current = groupedByPrefix.get(key) || []
       groupedByPrefix.set(key, [...current, candidate])
     })
@@ -290,7 +319,7 @@ export function AlbumPage() {
         return candidate
       }
 
-      const normalizedPrefix = (candidate.detectedPrefix || '').trim().toLowerCase()
+      const normalizedPrefix = normalizePrefixToken(candidate.detectedPrefix)
       const section = sectionByPrefix.get(normalizedPrefix)
       if (!section) {
         return candidate
