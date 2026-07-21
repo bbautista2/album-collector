@@ -4,9 +4,21 @@ import { useAuthStore } from '../stores/authStore'
 import { supabase } from '../lib/supabase'
 import { scanRepeatedStickers } from '../lib/repeatedScanner'
 import { AlbumStickerGrid } from '../components/AlbumStickerGrid'
-import type { Album, DetectedStickerNumber, ExchangeCommitment, Sticker, UserSticker } from '../types'
+import type { Album, ExchangeCommitment, Sticker, UserSticker } from '../types'
 
 type ScanMode = 'repeated' | 'missing'
+
+interface ScannedStickerCandidate {
+  key: string
+  stickerId: string | null
+  stickerNumber: number
+  detectedPrefix: string
+  displayCode: string
+  displayName: string
+  count: number
+  selected: boolean
+  mapped: boolean
+}
 
 export function AlbumPage() {
   const { albumId } = useParams()
@@ -23,7 +35,8 @@ export function AlbumPage() {
   const [scanMode, setScanMode] = useState<ScanMode>('missing')
   const [scanLoading, setScanLoading] = useState(false)
   const [scanError, setScanError] = useState<string | null>(null)
-  const [scanResults, setScanResults] = useState<DetectedStickerNumber[]>([])
+  const [scanCandidates, setScanCandidates] = useState<ScannedStickerCandidate[]>([])
+  const [saveScanLoading, setSaveScanLoading] = useState(false)
   const [scanRawText, setScanRawText] = useState<string | null>(null)
   const [pendingCommitments, setPendingCommitments] = useState<ExchangeCommitment[]>([])
   const [commitmentActionLoadingId, setCommitmentActionLoadingId] = useState<string | null>(null)
@@ -113,11 +126,309 @@ export function AlbumPage() {
     }
   }, [searchParams])
 
+  const mapStickerCandidate = (prefix: string, number: number): ScannedStickerCandidate | null => {
+    const normalizedPrefix = (prefix || '').trim().toLowerCase()
+    const section = sections.find((s) => (s.prefix || '').trim().toLowerCase() === normalizedPrefix)
+
+    let sticker: Sticker | undefined
+
+    if (section) {
+      sticker = stickers.find((st) => st.section_id === section.id && st.sticker_number === number)
+    }
+
+    if (!sticker) {
+      const byNumber = stickers.filter((st) => st.sticker_number === number)
+      if (byNumber.length === 1) {
+        sticker = byNumber[0]
+      } else if (byNumber.length > 1 && normalizedPrefix) {
+        sticker = byNumber.find((st) => st.name.toLowerCase().startsWith(normalizedPrefix))
+      }
+    }
+
+    const displayCode = `${prefix || ''}${number}`
+
+    if (!sticker) {
+      return {
+        key: `${normalizedPrefix}:${number}`,
+        stickerId: null,
+        stickerNumber: number,
+        detectedPrefix: prefix || '',
+        displayCode,
+        displayName: `Figurita ${displayCode}`,
+        count: 1,
+        selected: true,
+        mapped: false,
+      }
+    }
+
+    return {
+      key: sticker.id,
+      stickerId: sticker.id,
+      stickerNumber: sticker.sticker_number,
+      detectedPrefix: prefix || '',
+      displayCode,
+      displayName: sticker.name,
+      count: 1,
+      selected: true,
+      mapped: true,
+    }
+  }
+
+  const ensureMappedSelectedCandidates = async (
+    candidates: ScannedStickerCandidate[]
+  ): Promise<ScannedStickerCandidate[]> => {
+    if (!albumId || !user || !album) {
+      return candidates
+    }
+
+    const selectedUnmapped = candidates.filter((candidate) => candidate.selected && !candidate.mapped)
+    if (selectedUnmapped.length === 0) {
+      return candidates
+    }
+
+    if (album.created_by !== user.id) {
+      throw new Error(
+        'Este álbum no tiene catálogo de figuritas y solo el creador puede inicializarlo automáticamente.'
+      )
+    }
+
+    let nextSections = [...sections]
+    let nextStickers = [...stickers]
+    const sectionByPrefix = new Map(
+      nextSections.map((section) => [(section.prefix || '').trim().toLowerCase(), section])
+    )
+
+    const requiredPrefixes = Array.from(
+      new Set(selectedUnmapped.map((candidate) => (candidate.detectedPrefix || '').trim().toLowerCase()))
+    )
+
+    for (const normalizedPrefix of requiredPrefixes) {
+      if (sectionByPrefix.has(normalizedPrefix)) {
+        continue
+      }
+
+      const rawPrefix = selectedUnmapped.find(
+        (candidate) => (candidate.detectedPrefix || '').trim().toLowerCase() === normalizedPrefix
+      )?.detectedPrefix || ''
+
+      const sectionName = rawPrefix.trim()
+        ? `Sección ${rawPrefix.trim()}`
+        : 'Sección Principal'
+
+      const { data: newSection, error: sectionError } = await supabase
+        .from('album_sections')
+        .insert({
+          album_id: albumId,
+          name: sectionName,
+          prefix: rawPrefix,
+          total_stickers: 0,
+        })
+        .select('*')
+        .single()
+
+      if (sectionError) {
+        throw sectionError
+      }
+
+      if (newSection) {
+        nextSections = [...nextSections, newSection]
+        sectionByPrefix.set((newSection.prefix || '').trim().toLowerCase(), newSection)
+      }
+    }
+
+    const groupedByPrefix = new Map<string, ScannedStickerCandidate[]>()
+    selectedUnmapped.forEach((candidate) => {
+      const key = (candidate.detectedPrefix || '').trim().toLowerCase()
+      const current = groupedByPrefix.get(key) || []
+      groupedByPrefix.set(key, [...current, candidate])
+    })
+
+    for (const [normalizedPrefix, groupCandidates] of groupedByPrefix.entries()) {
+      const section = sectionByPrefix.get(normalizedPrefix)
+      if (!section) {
+        continue
+      }
+
+      const numbersToEnsure = Array.from(new Set(groupCandidates.map((candidate) => candidate.stickerNumber)))
+
+      const existingInSection = nextStickers.filter(
+        (sticker) => sticker.section_id === section.id && numbersToEnsure.includes(sticker.sticker_number)
+      )
+      const existingNumberSet = new Set(existingInSection.map((sticker) => sticker.sticker_number))
+      const missingNumbers = numbersToEnsure.filter((number) => !existingNumberSet.has(number))
+
+      if (missingNumbers.length > 0) {
+        const rowsToInsert = missingNumbers.map((number) => ({
+          section_id: section.id,
+          sticker_number: number,
+          name: section.prefix ? `${section.prefix}${number}` : `Sticker ${number}`,
+          category_or_team: null,
+        }))
+
+        const { data: insertedStickers, error: insertError } = await supabase
+          .from('stickers')
+          .insert(rowsToInsert)
+          .select('*')
+
+        if (insertError) {
+          throw insertError
+        }
+
+        if (insertedStickers && insertedStickers.length > 0) {
+          nextStickers = [...nextStickers, ...insertedStickers]
+        }
+
+        await supabase
+          .from('album_sections')
+          .update({ total_stickers: nextStickers.filter((sticker) => sticker.section_id === section.id).length })
+          .eq('id', section.id)
+      }
+    }
+
+    const remappedCandidates = candidates.map((candidate) => {
+      if (!candidate.selected || candidate.mapped) {
+        return candidate
+      }
+
+      const normalizedPrefix = (candidate.detectedPrefix || '').trim().toLowerCase()
+      const section = sectionByPrefix.get(normalizedPrefix)
+      if (!section) {
+        return candidate
+      }
+
+      const sticker = nextStickers.find(
+        (item) => item.section_id === section.id && item.sticker_number === candidate.stickerNumber
+      )
+
+      if (!sticker) {
+        return candidate
+      }
+
+      return {
+        ...candidate,
+        key: sticker.id,
+        stickerId: sticker.id,
+        displayName: sticker.name,
+        mapped: true,
+      }
+    })
+
+    setSections(nextSections)
+    setStickers(nextStickers)
+
+    return remappedCandidates
+  }
+
+  const resetScanPreview = () => {
+    setScanCandidates([])
+    setScanError(null)
+    setScanRawText(null)
+    setScanFile(null)
+  }
+
+  const toggleScanCandidate = (key: string) => {
+    setScanCandidates((current) =>
+      current.map((candidate) =>
+        candidate.key === key
+          ? {
+              ...candidate,
+              selected: !candidate.selected,
+            }
+          : candidate
+      )
+    )
+  }
+
+  const saveSelectedScanCandidates = async () => {
+    if (!user) {
+      return
+    }
+
+    setSaveScanLoading(true)
+    setScanError(null)
+
+    try {
+      const selectedCandidates = scanCandidates.filter((candidate) => candidate.selected)
+      if (selectedCandidates.length === 0) {
+        setScanError('No hay figuritas seleccionadas para guardar.')
+        return
+      }
+
+      const remappedCandidates = await ensureMappedSelectedCandidates(scanCandidates)
+      setScanCandidates(remappedCandidates)
+
+      const selectedMapped = remappedCandidates.filter(
+        (candidate) => candidate.selected && candidate.mapped && candidate.stickerId
+      )
+
+      if (selectedMapped.length === 0) {
+        setScanError('No hay figuritas mapeadas para guardar en la base de datos.')
+        return
+      }
+
+      const updates = selectedMapped.map((candidate) => {
+        const stickerId = candidate.stickerId as string
+        const existing = userStickers.get(stickerId)
+
+        if (scanMode === 'missing') {
+          const nextOwned = Math.max(existing?.quantity_owned || 0, 0) + candidate.count
+          return {
+            user_id: user.id,
+            sticker_id: stickerId,
+            quantity_owned: nextOwned,
+            quantity_repeated: Math.min(existing?.quantity_repeated || 0, nextOwned),
+          }
+        }
+
+        const nextRepeated = (existing?.quantity_repeated || 0) + candidate.count
+        const nextOwned = Math.max((existing?.quantity_owned || 0) + candidate.count, nextRepeated + 1)
+
+        return {
+          user_id: user.id,
+          sticker_id: stickerId,
+          quantity_owned: nextOwned,
+          quantity_repeated: nextRepeated,
+        }
+      })
+
+      const { error } = await supabase.from('user_stickers').upsert(updates, {
+        onConflict: 'user_id,sticker_id',
+      })
+
+      if (error) {
+        throw error
+      }
+
+      const updated = new Map(userStickers)
+      updates.forEach((update) => {
+        const existing = userStickers.get(update.sticker_id)
+        updated.set(update.sticker_id, {
+          id: existing?.id || '',
+          user_id: update.user_id,
+          sticker_id: update.sticker_id,
+          quantity_owned: update.quantity_owned,
+          quantity_repeated: update.quantity_repeated,
+          updated_at: new Date().toISOString(),
+        })
+      })
+      setUserStickers(updated)
+
+      setScanCandidates([])
+      setScanFile(null)
+      setScanRawText(null)
+    } catch (error) {
+      setScanError(error instanceof Error ? error.message : 'No se pudo guardar el resultado del escaneo')
+    } finally {
+      setSaveScanLoading(false)
+    }
+  }
+
   const handleScanRepeated = async () => {
     if (!scanFile || !album || !user) {
       return
     }
 
+    resetScanPreview()
     setScanLoading(true)
     setScanError(null)
 
@@ -136,121 +447,68 @@ export function AlbumPage() {
         setScanRawText(null)
       }
 
-      // If the function returned grouped missing_by_prefix, handle mapping by section/prefix
+      // If the function returned grouped missing_by_prefix, build preview candidates
       if (response.missingByPrefix && response.missingByPrefix.length > 0) {
-        const updates: Array<{ user_id: string; sticker_id: string; quantity_owned: number; quantity_repeated: number }> = []
-
+        const candidateMap = new Map<string, ScannedStickerCandidate>()
         response.missingByPrefix.forEach((group) => {
           const prefix = group.prefix || ''
-          const section = sections.find((s) => (s.prefix || '') === prefix)
-          if (!section) return
-
           group.numbers.forEach((num) => {
-            const matchingSticker = stickers.find((st) => st.section_id === section.id && st.sticker_number === num)
-            if (!matchingSticker) return
-
-            const existing = userStickers.get(matchingSticker.id)
-            if (scanMode === 'missing') {
-              const nextOwned = Math.max(existing?.quantity_owned || 0, 0) + 1
-              updates.push({ user_id: user.id, sticker_id: matchingSticker.id, quantity_owned: nextOwned, quantity_repeated: Math.min(existing?.quantity_repeated || 0, nextOwned) })
-            } else {
-              const nextRepeated = (existing?.quantity_repeated || 0) + 1
-              const nextOwned = Math.max((existing?.quantity_owned || 0) + 1, nextRepeated + 1)
-              updates.push({ user_id: user.id, sticker_id: matchingSticker.id, quantity_owned: nextOwned, quantity_repeated: nextRepeated })
+            const candidate = mapStickerCandidate(prefix, num)
+            if (!candidate) {
+              return
             }
+
+            const existingCandidate = candidateMap.get(candidate.key)
+            if (!existingCandidate) {
+              candidateMap.set(candidate.key, candidate)
+              return
+            }
+
+            candidateMap.set(candidate.key, {
+              ...existingCandidate,
+              count: existingCandidate.count + 1,
+            })
           })
         })
 
-        if (updates.length === 0) {
+        const previewCandidates = Array.from(candidateMap.values()).sort(
+          (a, b) => a.stickerNumber - b.stickerNumber
+        )
+
+        if (previewCandidates.length === 0) {
           setScanError('No se detectaron figuritas para mapear en la imagen')
           return
         }
 
-        const { error } = await supabase.from('user_stickers').upsert(updates, { onConflict: 'user_id,sticker_id' })
-        if (error) throw error
-
-        const updated = new Map(userStickers)
-        updates.forEach((update) => {
-          const existing = userStickers.get(update.sticker_id)
-          updated.set(update.sticker_id, {
-            id: existing?.id || '',
-            user_id: update.user_id,
-            sticker_id: update.sticker_id,
-            quantity_owned: update.quantity_owned,
-            quantity_repeated: update.quantity_repeated,
-            updated_at: new Date().toISOString(),
-          })
-        })
-        setUserStickers(updated)
+        setScanCandidates(previewCandidates)
         return
       }
 
-      // Backwards-compatible flow: flat detectedNumbers
+      // Backwards-compatible flow: flat detectedNumbers -> preview candidates
       const validResults = response.detectedNumbers.filter((item) => item.count > 0)
-      setScanResults(validResults)
 
       if (validResults.length === 0) {
         setScanError('No se detectaron figuritas en la imagen')
-        setScanResults([])
         return
       }
 
-      const updates = validResults
+      const previewCandidates = validResults
         .map((item) => {
-          const matchingSticker = stickers.find((sticker) => sticker.sticker_number === item.stickerNumber)
-
-          if (!matchingSticker) {
-            return null
-          }
-
-          const existing = userStickers.get(matchingSticker.id)
-
-          if (scanMode === 'missing') {
-            const nextOwned = Math.max(existing?.quantity_owned || 0, 0) + item.count
-
-            return {
-              user_id: user.id,
-              sticker_id: matchingSticker.id,
-              quantity_owned: nextOwned,
-              quantity_repeated: Math.min(existing?.quantity_repeated || 0, nextOwned),
-            }
-          }
-
-          const nextRepeated = (existing?.quantity_repeated || 0) + item.count
-          const nextOwned = Math.max((existing?.quantity_owned || 0) + item.count, nextRepeated + 1)
-
+          const candidate = mapStickerCandidate('', item.stickerNumber)
+          if (!candidate) return null
           return {
-            user_id: user.id,
-            sticker_id: matchingSticker.id,
-            quantity_owned: nextOwned,
-            quantity_repeated: nextRepeated,
+            ...candidate,
+            count: item.count,
           }
         })
-        .filter((item): item is { user_id: string; sticker_id: string; quantity_owned: number; quantity_repeated: number } => item !== null)
+        .filter((item): item is ScannedStickerCandidate => item !== null)
 
-      if (updates.length === 0) {
+      if (previewCandidates.length === 0) {
         setScanError('No se detectaron figuritas mapeables en la imagen')
         return
       }
 
-      const { error } = await supabase.from('user_stickers').upsert(updates, { onConflict: 'user_id,sticker_id' })
-      if (error) {
-        throw error
-      }
-
-      const updated = new Map(userStickers)
-      updates.forEach((update) => {
-        const existing = userStickers.get(update.sticker_id)
-        updated.set(update.sticker_id, {
-          id: existing?.id || '',
-          user_id: update.user_id,
-          sticker_id: update.sticker_id,
-          quantity_owned: update.quantity_owned,
-          quantity_repeated: update.quantity_repeated,
-          updated_at: new Date().toISOString(),
-        })
-      })
-      setUserStickers(updated)
+      setScanCandidates(previewCandidates)
     } catch (error) {
       setScanError(error instanceof Error ? error.message : 'No se pudo procesar la imagen')
     } finally {
@@ -323,6 +581,8 @@ export function AlbumPage() {
     scanMode === 'missing'
       ? 'Escanea tu grilla para registrar las figuritas que ya conseguiste y visualizar las faltantes.'
       : 'Escanea una foto de tus repetidas para actualizar tu inventario automáticamente.'
+  const selectedCandidateCount = scanCandidates.filter((candidate) => candidate.selected).length
+  const unmappedCandidateCount = scanCandidates.filter((candidate) => !candidate.mapped).length
 
   return (
     <div className="space-y-6">
@@ -362,13 +622,22 @@ export function AlbumPage() {
               onChange={(e) => setScanFile(e.target.files?.[0] || null)}
               className="block w-full text-sm text-gray-600 md:w-auto"
             />
-            <button
-              onClick={handleScanRepeated}
-              disabled={!scanFile || scanLoading}
-              className="rounded-xl bg-slate-900 px-4 py-2 font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {scanLoading ? 'Analizando imagen...' : scanActionLabel}
-            </button>
+            <div className="flex flex-wrap items-center gap-2 md:justify-end">
+              <button
+                onClick={handleScanRepeated}
+                disabled={!scanFile || scanLoading}
+                className="rounded-xl bg-slate-900 px-4 py-2 font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {scanLoading ? 'Analizando imagen...' : scanActionLabel}
+              </button>
+              <button
+                onClick={resetScanPreview}
+                disabled={scanLoading || saveScanLoading}
+                className="rounded-xl border border-slate-300 px-4 py-2 font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-50"
+              >
+                Volver a escanear
+              </button>
+            </div>
           </div>
         </div>
 
@@ -401,10 +670,61 @@ export function AlbumPage() {
           </div>
         )}
 
-        {scanResults.length > 0 && (
-          <div className="mt-4 rounded-md bg-orange-50 px-4 py-3 text-sm text-orange-900">
-            {scanMode === 'repeated' ? 'Repetidas detectadas' : 'Faltantes conseguidas detectadas'}:{' '}
-            {scanResults.map((item) => `#${item.stickerNumber} × ${item.count}`).join(', ')}
+        {scanCandidates.length > 0 && (
+          <div className="mt-5 space-y-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+            <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+              <div>
+                <p className="text-sm font-semibold text-slate-800">
+                  Figuritas detectadas: {scanCandidates.length}
+                </p>
+                <p className="text-xs text-slate-500">
+                  Seleccionadas para guardar: {selectedCandidateCount}
+                  {unmappedCandidateCount > 0 ? ` · Sin mapeo: ${unmappedCandidateCount}` : ''}
+                </p>
+              </div>
+
+              <button
+                onClick={saveSelectedScanCandidates}
+                disabled={selectedCandidateCount === 0 || saveScanLoading}
+                className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {saveScanLoading ? 'Guardando...' : 'Confirmar y guardar'}
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2 md:grid-cols-3 lg:grid-cols-4">
+              {scanCandidates.map((candidate) => (
+                <label
+                  key={candidate.key}
+                  className={`cursor-pointer rounded-xl border p-3 transition ${
+                    candidate.selected
+                      ? 'border-emerald-300 bg-emerald-50'
+                      : 'border-slate-200 bg-white'
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                        {candidate.mapped ? 'Mapeada' : 'Sin mapeo'}
+                      </p>
+                      <p className="mt-1 text-lg font-black text-slate-900">#{candidate.stickerNumber}</p>
+                      <p className="text-xs text-slate-500">{candidate.displayCode}</p>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={candidate.selected}
+                      onChange={() => toggleScanCandidate(candidate.key)}
+                      className="mt-1 h-4 w-4 rounded border-slate-300 text-emerald-600"
+                    />
+                  </div>
+
+                  <p className="mt-2 truncate text-xs text-slate-700">{candidate.displayName}</p>
+                  {candidate.count > 1 ? (
+                    <p className="mt-1 text-[11px] font-semibold text-slate-500">Detectada × {candidate.count}</p>
+                  ) : null}
+                </label>
+              ))}
+            </div>
           </div>
         )}
 
