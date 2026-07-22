@@ -14,13 +14,20 @@ export function AlbumStickerGrid({ stickers, userStickers }: AlbumStickerGridPro
   const gridStats = useMemo(() => {
     const total = stickers.length
     const owned = stickers.filter((sticker) => (userStickers.get(sticker.id)?.quantity_owned || 0) > 0).length
-    const missing = Math.max(0, total - owned)
+    const missing = stickers.filter((sticker) => {
+      const userSticker = userStickers.get(sticker.id)
+      return !!userSticker && (userSticker.quantity_owned || 0) === 0
+    }).length
+    const unknown = Math.max(0, total - owned - missing)
     const visibleStickers =
       viewMode === 'missing'
-        ? stickers.filter((sticker) => (userStickers.get(sticker.id)?.quantity_owned || 0) === 0)
+        ? stickers.filter((sticker) => {
+            const userSticker = userStickers.get(sticker.id)
+            return !!userSticker && (userSticker.quantity_owned || 0) === 0
+          })
         : stickers
 
-    return { total, owned, missing, visibleStickers }
+    return { total, owned, missing, unknown, visibleStickers }
   }, [stickers, userStickers, viewMode])
 
   return (
@@ -30,7 +37,7 @@ export function AlbumStickerGrid({ stickers, userStickers }: AlbumStickerGridPro
           <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Grilla del álbum</p>
           <h2 className="mt-1 text-2xl font-bold text-slate-900">Visualiza tu progreso</h2>
           <p className="mt-2 max-w-2xl text-sm text-slate-600">
-            Marca visualmente las figuras obtenidas y filtra rápidamente solo las que te faltan.
+            Las faltantes se muestran cuando ya fueron escaneadas para este usuario.
           </p>
         </div>
 
@@ -60,7 +67,7 @@ export function AlbumStickerGrid({ stickers, userStickers }: AlbumStickerGridPro
         </div>
       </div>
 
-      <div className="mt-4 grid gap-3 sm:grid-cols-3">
+      <div className="mt-4 grid gap-3 sm:grid-cols-4">
         <div className="rounded-2xl bg-slate-50 px-4 py-3">
           <p className="text-xs uppercase tracking-wide text-slate-400">Total</p>
           <p className="mt-1 text-2xl font-bold text-slate-900">{gridStats.total}</p>
@@ -73,42 +80,68 @@ export function AlbumStickerGrid({ stickers, userStickers }: AlbumStickerGridPro
           <p className="text-xs uppercase tracking-wide text-amber-500">Faltantes</p>
           <p className="mt-1 text-2xl font-bold text-amber-700">{gridStats.missing}</p>
         </div>
+        <div className="rounded-2xl bg-slate-100 px-4 py-3">
+          <p className="text-xs uppercase tracking-wide text-slate-500">Sin escanear</p>
+          <p className="mt-1 text-2xl font-bold text-slate-700">{gridStats.unknown}</p>
+        </div>
       </div>
 
       <div className="mt-5 grid grid-cols-3 gap-2 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 xl:grid-cols-10">
         {gridStats.visibleStickers.map((sticker) => {
           const userSticker = userStickers.get(sticker.id)
           const owned = (userSticker?.quantity_owned || 0) > 0
+          const missing = !!userSticker && (userSticker.quantity_owned || 0) === 0
+
+          const cardStyle = owned
+            ? 'border-slate-200 bg-slate-100/80 text-slate-400 opacity-80'
+            : missing
+              ? 'border-amber-300 bg-white shadow-sm shadow-amber-100'
+              : 'border-slate-200 bg-white text-slate-700'
+
+          const tagStyle = owned
+            ? 'text-slate-400'
+            : missing
+              ? 'text-amber-500'
+              : 'text-slate-500'
+
+          const numberStyle = owned
+            ? 'text-slate-500'
+            : missing
+              ? 'text-slate-900'
+              : 'text-slate-700'
+
+          const iconStyle = owned
+            ? 'bg-emerald-100 text-emerald-700'
+            : missing
+              ? 'bg-amber-100 text-amber-700'
+              : 'bg-slate-100 text-slate-500'
+
+          const icon = owned ? '✓' : missing ? '!' : '·'
+          const statusLabel = owned ? 'Obtenida' : missing ? 'Faltante' : 'Sin escanear'
 
           return (
             <div
               key={sticker.id}
-              className={`group relative overflow-hidden rounded-2xl border p-3 transition-all duration-300 ${
-                owned
-                  ? 'border-slate-200 bg-slate-100/80 text-slate-400 opacity-80'
-                  : 'border-amber-300 bg-white shadow-sm shadow-amber-100'
-              }`}
+              className={`group relative overflow-hidden rounded-2xl border p-3 transition-all duration-300 ${cardStyle}`}
             >
               <div className="flex items-start justify-between gap-2">
                 <div>
-                  <p className={`text-[11px] uppercase tracking-[0.2em] ${owned ? 'text-slate-400' : 'text-amber-500'}`}>
-                    {owned ? 'Obtenida' : 'Faltante'}
+                  <p className={`text-[11px] uppercase tracking-[0.2em] ${tagStyle}`}>
+                    {statusLabel}
                   </p>
-                  <p className={`mt-1 text-lg font-black ${owned ? 'text-slate-500' : 'text-slate-900'}`}>
+                  <p className={`mt-1 text-lg font-black ${numberStyle}`}>
                     #{sticker.sticker_number}
                   </p>
                 </div>
 
                 <div
-                  className={`flex h-7 w-7 items-center justify-center rounded-full text-sm font-bold ${
-                    owned ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'
-                  }`}
+                  className={`flex h-7 w-7 items-center justify-center rounded-full text-sm font-bold ${iconStyle}`}
                 >
-                  {owned ? '✓' : '!'}
+                  {icon}
                 </div>
               </div>
 
-              <p className={`mt-3 truncate text-xs font-medium ${owned ? 'text-slate-500' : 'text-slate-700'}`}>
+              <p className={`mt-3 truncate text-xs font-medium ${owned ? 'text-slate-500' : missing ? 'text-slate-700' : 'text-slate-600'}`}>
                 {sticker.name}
               </p>
 
@@ -116,7 +149,7 @@ export function AlbumStickerGrid({ stickers, userStickers }: AlbumStickerGridPro
                 <p className="mt-1 truncate text-[11px] text-slate-400">{sticker.category_or_team}</p>
               ) : null}
 
-              {!owned ? <div className="pointer-events-none absolute inset-x-0 bottom-0 h-1 bg-amber-300/70" /> : null}
+              {missing ? <div className="pointer-events-none absolute inset-x-0 bottom-0 h-1 bg-amber-300/70" /> : null}
             </div>
           )
         })}
