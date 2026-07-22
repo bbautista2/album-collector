@@ -6,6 +6,7 @@ interface ScanRepeatedInput {
   albumTitle: string
   validStickerNumbers: number[]
   albumId?: number | string
+  scanMode?: 'repeated' | 'missing'
 }
 
 const geminiApiKey = import.meta.env.VITE_GEMINI_API_KEY
@@ -35,6 +36,15 @@ function parseMissingByPrefix(json: unknown) {
   }))
 }
 
+function parseRepeatedByPrefix(json: unknown) {
+  const raw = (json as any)?.repeated_by_prefix
+  if (!Array.isArray(raw)) return undefined
+  return raw.map((g: any) => ({
+    prefix: String(g?.prefix || ''),
+    numbers: Array.isArray(g?.numbers) ? g.numbers.map(Number) : [],
+  }))
+}
+
 // ─── Main export ─────────────────────────────────────────────────────────────
 
 export async function scanRepeatedStickers({
@@ -42,6 +52,7 @@ export async function scanRepeatedStickers({
   albumTitle,
   validStickerNumbers,
   albumId,
+  scanMode = 'repeated',
 }: ScanRepeatedInput): Promise<ScanRepeatedResponse> {
   if (!geminiApiKey) {
     throw new Error('Falta VITE_GEMINI_API_KEY en tus variables de entorno')
@@ -82,6 +93,7 @@ export async function scanRepeatedStickers({
   form.append('albumTitle', albumTitle)
   form.append('validStickerNumbers', JSON.stringify(validStickerNumbers))
   form.append('albumId', String(albumId))
+  form.append('scanMode', scanMode)
 
   const res = await supabase.functions.invoke('process-grid-image', { body: form })
 
@@ -95,13 +107,15 @@ export async function scanRepeatedStickers({
   console.log('✅ process-grid-image response:', json)
 
   const missingByPrefix = parseMissingByPrefix(json)
+  const repeatedByPrefix = parseRepeatedByPrefix(json)
   const expanded: number[] = []
-  missingByPrefix?.forEach((g) => g.numbers.forEach((n: number) => expanded.push(n)))
+  ;(repeatedByPrefix || missingByPrefix)?.forEach((g) => g.numbers.forEach((n: number) => expanded.push(n)))
 
   return {
     detectedNumbers: normalizeDetectedNumbers(expanded, validStickerNumbers),
     rawText: json.rawText || '',
     model: json.model || 'process-grid-image',
     missingByPrefix,
+    repeatedByPrefix,
   }
 }

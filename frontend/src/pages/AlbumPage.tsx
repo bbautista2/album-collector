@@ -519,6 +519,7 @@ export function AlbumPage() {
         albumTitle: album.title,
         validStickerNumbers: stickers.map((sticker) => sticker.sticker_number),
         albumId: albumId,
+        scanMode,
       })
 
       // Save rawText for debugging if present
@@ -528,8 +529,8 @@ export function AlbumPage() {
         setScanRawText(null)
       }
 
-      // If the function returned grouped missing_by_prefix, build preview candidates
-      if (response.missingByPrefix && response.missingByPrefix.length > 0) {
+      // Build preview candidates from the mode-specific response contract
+      if (scanMode === 'missing' && response.missingByPrefix && response.missingByPrefix.length > 0) {
         const candidateMap = new Map<string, ScannedStickerCandidate>()
         response.missingByPrefix.forEach((group) => {
           const prefix = group.prefix || ''
@@ -567,7 +568,6 @@ export function AlbumPage() {
         return
       }
 
-      // Backwards-compatible flow: flat detectedNumbers -> preview candidates
       const validResults = response.detectedNumbers.filter((item) => item.count > 0)
 
       if (validResults.length === 0) {

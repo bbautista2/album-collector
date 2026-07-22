@@ -109,6 +109,7 @@ export interface ScanRepeatedResponse {
   rawText?: string;
   model?: string;
   missingByPrefix?: Array<{ prefix: string; numbers: number[] }>;
+  repeatedByPrefix?: Array<{ prefix: string; numbers: number[] }>;
 }
 
 export interface AlbumSection {
