@@ -675,6 +675,41 @@ export function AlbumPage() {
   const selectedCandidateCount = scanCandidates.filter((candidate) => candidate.selected).length
   const unmappedCandidateCount = scanCandidates.filter((candidate) => !candidate.mapped).length
   const stickerById = useMemo(() => new Map(stickers.map((sticker) => [sticker.id, sticker])), [stickers])
+  const repeatedSummary = useMemo(() => {
+    const items = stickers
+      .map((sticker) => {
+        const userSticker = userStickers.get(sticker.id)
+        const repeatedCount = userSticker?.quantity_repeated || 0
+
+        if (repeatedCount <= 0) {
+          return null
+        }
+
+        return {
+          sticker,
+          repeatedCount,
+          ownedCount: userSticker?.quantity_owned || 0,
+        }
+      })
+      .filter(
+        (
+          item
+        ): item is { sticker: Sticker; repeatedCount: number; ownedCount: number } => item !== null
+      )
+      .sort((a, b) => {
+        if (b.repeatedCount !== a.repeatedCount) {
+          return b.repeatedCount - a.repeatedCount
+        }
+        return a.sticker.sticker_number - b.sticker.sticker_number
+      })
+
+    return {
+      items,
+      totalTypes: items.length,
+      totalCopies: items.reduce((sum, item) => sum + item.repeatedCount, 0),
+    }
+  }, [stickers, userStickers])
+
   const missingSyncSummary = useMemo(() => {
     if (scanMode !== 'missing') {
       return null
@@ -937,6 +972,54 @@ export function AlbumPage() {
           <div className="mt-4 rounded-md bg-gray-50 px-4 py-3 text-xs text-gray-700">
             <div className="font-semibold text-gray-800 mb-1">Texto crudo del procesador (para depuración)</div>
             <pre className="whitespace-pre-wrap break-words max-h-40 overflow-auto">{scanRawText}</pre>
+          </div>
+        )}
+      </div>
+
+      <div className="rounded-3xl border border-violet-200 bg-white p-5 shadow-sm">
+        <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-violet-400">Inventario de repetidas</p>
+            <h2 className="mt-1 text-2xl font-bold text-slate-900">Mis repetidas</h2>
+            <p className="mt-2 text-sm text-slate-600">
+              Aquí ves todas las repetidas ya guardadas en este álbum.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2 md:w-auto">
+            <div className="rounded-2xl bg-violet-50 px-4 py-3">
+              <p className="text-xs uppercase tracking-wide text-violet-500">Tipos repetidos</p>
+              <p className="mt-1 text-2xl font-bold text-violet-700">{repeatedSummary.totalTypes}</p>
+            </div>
+            <div className="rounded-2xl bg-indigo-50 px-4 py-3">
+              <p className="text-xs uppercase tracking-wide text-indigo-500">Copias repetidas</p>
+              <p className="mt-1 text-2xl font-bold text-indigo-700">{repeatedSummary.totalCopies}</p>
+            </div>
+          </div>
+        </div>
+
+        {repeatedSummary.items.length === 0 ? (
+          <div className="mt-4 rounded-2xl border border-dashed border-violet-200 bg-violet-50/40 p-4 text-sm text-violet-700">
+            Aún no tienes repetidas guardadas. Escanea en modo <strong>Ver repetidas</strong> y confirma para verlas aquí.
+          </div>
+        ) : (
+          <div className="mt-5 grid grid-cols-2 gap-2 md:grid-cols-3 lg:grid-cols-5 xl:grid-cols-6">
+            {repeatedSummary.items.map(({ sticker, repeatedCount, ownedCount }) => (
+              <div
+                key={sticker.id}
+                className="rounded-2xl border border-violet-200 bg-violet-50 p-3"
+              >
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-violet-500">Repetida</p>
+                <p className="mt-1 text-xl font-black text-violet-900">#{sticker.sticker_number}</p>
+                <p className="truncate text-xs text-violet-700">{sticker.name}</p>
+                <div className="mt-2 flex items-center justify-between text-[11px]">
+                  <span className="rounded-full bg-violet-100 px-2 py-0.5 font-semibold text-violet-700">
+                    x{repeatedCount}
+                  </span>
+                  <span className="text-violet-600">Total: {ownedCount}</span>
+                </div>
+              </div>
+            ))}
           </div>
         )}
       </div>
