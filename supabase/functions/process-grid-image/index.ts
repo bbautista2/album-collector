@@ -57,29 +57,36 @@ function extractJsonBlock(text: string): string {
   return objectMatch?.[0]?.trim() || text.trim()
 }
 
-function normalizeMissingByPrefix(
+function normalizeGroupedNumbers(
   payload: any,
   validStickerNumbers: number[],
-  allowedPrefixes: string[]
-): { missing_by_prefix: Array<{ prefix: string; numbers: number[] }> } {
+  allowedPrefixes: string[],
+  mode: 'repeated' | 'missing'
+): { repeated_by_prefix?: Array<{ prefix: string; numbers: number[] }>; missing_by_prefix?: Array<{ prefix: string; numbers: number[] }> } {
   const validSet = new Set(validStickerNumbers)
   const prefixSet = new Set(allowedPrefixes.map((value) => String(value || '')))
 
-  const groups = Array.isArray(payload?.missing_by_prefix)
-    ? payload.missing_by_prefix
+  const sourceKey = mode === 'missing' ? 'missing_by_prefix' : 'repeated_by_prefix'
+  const groups = Array.isArray(payload?.[sourceKey])
+    ? payload[sourceKey]
     : [{ prefix: '', numbers: [] }]
 
   const normalized = groups.map((group: any) => {
     const prefix = String(group?.prefix || '')
     const numbersRaw = Array.isArray(group?.numbers) ? group.numbers : []
-    const numbers = Array.from(
-      new Set<number>(
-        numbersRaw
-          .map((value: any) => Number(value))
-          .filter((value: number) => Number.isInteger(value) && value > 0)
-          .filter((value: number) => (validSet.size > 0 ? validSet.has(value) : true))
-      )
-    ).sort((a, b) => a - b)
+    const filteredNumbers: number[] = numbersRaw
+      .map((value: any) => Number(value))
+      .filter((value: number) => Number.isInteger(value) && value > 0)
+
+    const normalizedNumbers =
+      mode === 'missing'
+        ? filteredNumbers.filter((value: number) => (validSet.size > 0 ? validSet.has(value) : true))
+        : filteredNumbers
+
+    const numbers =
+      mode === 'missing'
+          ? Array.from(new Set<number>(normalizedNumbers)).sort((a: number, b: number) => a - b)
+          : normalizedNumbers.sort((a: number, b: number) => a - b)
 
     return {
       prefix: prefixSet.size > 0 ? (prefixSet.has(prefix) ? prefix : '') : prefix,
@@ -87,13 +94,14 @@ function normalizeMissingByPrefix(
     }
   })
 
-  return { missing_by_prefix: normalized }
+  return mode === 'missing' ? { missing_by_prefix: normalized } : { repeated_by_prefix: normalized }
 }
 
-function hasDetectedNumbers(payload: any): boolean {
+function hasDetectedNumbers(payload: any, mode: 'repeated' | 'missing'): boolean {
+  const key = mode === 'missing' ? 'missing_by_prefix' : 'repeated_by_prefix'
   return (
-    Array.isArray(payload?.missing_by_prefix) &&
-    payload.missing_by_prefix.some((group: any) => Array.isArray(group?.numbers) && group.numbers.length > 0)
+    Array.isArray(payload?.[key]) &&
+    payload[key].some((group: any) => Array.isArray(group?.numbers) && group.numbers.length > 0)
   )
 }
 
@@ -145,6 +153,8 @@ serve(async (req: Request) => {
     const albumIdValue = form.get('albumId')
     const albumId = albumIdValue !== null ? String(albumIdValue) : null
     const albumTitle = String(form.get('albumTitle') || '')
+      const scanModeRaw = String(form.get('scanMode') || 'repeated')
+      const scanMode: 'repeated' | 'missing' = scanModeRaw === 'missing' ? 'missing' : 'repeated'
     const validStickerNumbersRaw = String(form.get('validStickerNumbers') || '[]')
     const file = form.get('image') as File | null
 
@@ -198,9 +208,6 @@ serve(async (req: Request) => {
       return new Response(JSON.stringify({ error: sectionsError.message }), { status: 500, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } })
     }
 
-    const sectionSummary = (sections || [])
-      .map((s: any) => `Sección '${s.name}' con prefijo '${s.prefix || ''}'`)
-      .join(', ')
     const allowedPrefixes = (sections || []).map((s: any) => String(s.prefix || ''))
     const validStickerHint = validStickerNumbers.length > 0
       ? `Números válidos del álbum: ${validStickerNumbers.slice(0, 300).join(', ')}.`
@@ -249,18 +256,30 @@ serve(async (req: Request) => {
       return data.candidates?.[0]?.content?.parts?.map((p: any) => p.text || '').join('') || ''
     }
 
-    // Primary prompt: more flexible, aims to detect ALL visible numbers
-    const promptPrimary = [
-      `Imagen de álbum: "${albumTitle || 'sin nombre'}"`,
-      sectionSummary ? `Secciones esperadas: ${sectionSummary}.` : '',
-      'Tu tarea: Extrae TODOS los números o códigos alfanuméricos visibles en esta imagen.',
-      'Ejemplos: números como 1, 2, 15, 42, 100',
-      'Ejemplos con prefijo: T1, T2, T20, E1, E5, E40',
-      'Agrupa los números por su prefijo (si no hay prefijo, usa cadena vacía).',
-      validStickerHint,
-      'Responde ÚNICAMENTE con JSON en este formato exacto (sin explicación extra):',
-      '{"missing_by_prefix":[{"prefix":"","numbers":[1,2,3,4,5]},{"prefix":"T","numbers":[1,2,3]}]}',
-    ].join(' ')
+    const promptPrimary = scanMode === 'missing'
+      ? [
+          `Imagen de álbum: "${albumTitle || 'sin nombre'}"`,
+          'Tu tarea: Detecta las figuritas que FALTAN en la grilla y devuelve sus números visibles agrupados por prefijo.',
+          'Si no puedes inferir faltantes, usa las marcas visibles como referencia y extrae los números que correspondan a los espacios vacíos.',
+          'Agrupa los números por su prefijo (si no hay prefijo, usa cadena vacía).',
+          validStickerHint,
+          'Responde ÚNICAMENTE con JSON en este formato exacto (sin explicación extra):',
+          '{"missing_by_prefix":[{"prefix":"","numbers":[1,2,3,4,5]},{"prefix":"T","numbers":[1,2,3]}]}',
+        ].join(' ')
+      : [
+          `Imagen de álbum: "${albumTitle || 'sin nombre'}"`,
+          'Esta imagen contiene una colección de stickers repetidos del álbum. Tu tarea es detectar TODOS los stickers visibles en la imagen.',
+          'Lee cada número visible en cada sticker, incluyendo los que solo aparecen una vez.',
+          'Si el mismo número aparece en 3 stickers distintos, inclúyelo 3 veces en la lista.',
+          'Si un número aparece solo una vez, inclúyelo una vez.',
+          'NO inventes números. Si no puedes leer un sticker con claridad, no lo incluyas.',
+          'Antes de responder, verifica visualmente el conteo para evitar sobreconteos.',
+          'Agrupa los números por su prefijo alfanumérico (si no tienen prefijo, usa cadena vacía "").',
+          'NO omitas ningún sticker aunque aparezca solo una vez.',
+          validStickerHint,
+          'Responde ÚNICAMENTE con JSON en este formato exacto (sin explicación extra):',
+          '{"repeated_by_prefix":[{"prefix":"","numbers":[31,39,42,42,42,59,64,97,97]},{"prefix":"T","numbers":[16,16,17]}]}',
+        ].join(' ')
 
     let rawText = ''
     let parsed: any = null
@@ -272,28 +291,41 @@ serve(async (req: Request) => {
       parsed = null
     }
 
-    let normalized = normalizeMissingByPrefix(parsed, validStickerNumbers, allowedPrefixes)
+    let normalized = normalizeGroupedNumbers(parsed, validStickerNumbers, allowedPrefixes, scanMode)
 
     // Retry with more aggressive OCR prompt if nothing was detected
-    if (!hasDetectedNumbers(normalized)) {
-      const promptFallback = [
-        `Imagen: ${albumTitle || 'sin nombre'}.`,
-        'SEGUNDA BÚSQUEDA: Lee CUALQUIER número visible en la imagen, incluso si está pequeño, inclinado, o parcial.',
-        'Extrae números individuales: 0-9, 10-99, 100-999, etc.',
-        'Extrae códigos como: T, E, A, B, etc. seguidos de números.',
-        'Ejemplo: Si ves "T" y "15" por separado o juntos, es T15.',
-        'Si ves solo números sin prefijo, agrúpalos bajo prefijo vacío ("").',
-        'Devuelve JSON estricto sin texto adicional:',
-        '{"missing_by_prefix":[{"prefix":"","numbers":[...]},{"prefix":"T","numbers":[...]}]}',
-        'Si NO ves NINGÚN número, devuelve: {"missing_by_prefix":[{"prefix":"","numbers":[]}]}',
-      ].join(' ')
+    if (!hasDetectedNumbers(normalized, scanMode)) {
+      const promptFallback = scanMode === 'missing'
+        ? [
+            `Imagen: ${albumTitle || 'sin nombre'}.`,
+            'SEGUNDA BÚSQUEDA: Lee CUALQUIER número visible en la imagen, incluso si está pequeño, inclinado, o parcial.',
+            'Extrae números individuales: 0-9, 10-99, 100-999, etc.',
+            'Extrae códigos como: T, E, A, B, etc. seguidos de números.',
+            'Ejemplo: Si ves "T" y "15" por separado o juntos, es T15.',
+            'Si ves solo números sin prefijo, agrúpalos bajo prefijo vacío ("").',
+            'Devuelve JSON estricto sin texto adicional:',
+            '{"missing_by_prefix":[{"prefix":"","numbers":[...]},{"prefix":"T","numbers":[...]}]}',
+            'Si NO ves NINGÚN número, devuelve: {"missing_by_prefix":[{"prefix":"","numbers":[]}]}',
+          ].join(' ')
+        : [
+            `Imagen: ${albumTitle || 'sin nombre'}.`,
+            'SEGUNDA BÚSQUEDA: Esta es una pila de stickers del álbum. Lee el número de CADA sticker visible, aunque esté parcial, inclinado o con mala luz.',
+            'Incluye TODOS los stickers, incluso los que aparecen una sola vez.',
+            'Cuenta cuántos stickers físicos hay de cada número y repite ese número esa cantidad de veces en la lista.',
+          'No inventes números ni aumentes conteos por suposición.',
+          'Si dudas entre dos números parecidos, omítelo en lugar de adivinar.',
+            'Agrupa por prefijo (sin prefijo = "").',
+            'Devuelve JSON estricto sin texto adicional:',
+            '{"repeated_by_prefix":[{"prefix":"","numbers":[31,39,42,42,42,59,64,97,97]},{"prefix":"T","numbers":[16,17]}]}',
+            'Si NO ves NINGÚN sticker, devuelve: {"repeated_by_prefix":[{"prefix":"","numbers":[]}]}',
+          ].join(' ')
 
       try {
         const rawTextFallback = await callGemini(promptFallback)
         const parsedFallback = JSON.parse(extractJsonBlock(rawTextFallback))
-        const normalizedFallback = normalizeMissingByPrefix(parsedFallback, validStickerNumbers, allowedPrefixes)
+        const normalizedFallback = normalizeGroupedNumbers(parsedFallback, validStickerNumbers, allowedPrefixes, scanMode)
 
-        if (hasDetectedNumbers(normalizedFallback)) {
+        if (hasDetectedNumbers(normalizedFallback, scanMode)) {
           normalized = normalizedFallback
           rawText = rawTextFallback
         } else {

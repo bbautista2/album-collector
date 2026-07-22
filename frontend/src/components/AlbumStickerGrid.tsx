@@ -1,6 +1,8 @@
 import { useMemo, useState } from 'react'
 import type { Sticker, UserSticker } from '../types'
 
+const PAGE_SIZE = 50
+
 type ViewMode = 'all' | 'missing'
 
 interface AlbumStickerGridProps {
@@ -10,6 +12,7 @@ interface AlbumStickerGridProps {
 
 export function AlbumStickerGrid({ stickers, userStickers }: AlbumStickerGridProps) {
   const [viewMode, setViewMode] = useState<ViewMode>('all')
+  const [page, setPage] = useState(0)
 
   const gridStats = useMemo(() => {
     const total = stickers.length
@@ -30,6 +33,14 @@ export function AlbumStickerGrid({ stickers, userStickers }: AlbumStickerGridPro
     return { total, owned, missing, unknown, visibleStickers }
   }, [stickers, userStickers, viewMode])
 
+  const totalPages = Math.max(1, Math.ceil(gridStats.visibleStickers.length / PAGE_SIZE))
+  const paginatedStickers = gridStats.visibleStickers.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE)
+
+  const handleViewModeChange = (mode: ViewMode) => {
+    setViewMode(mode)
+    setPage(0)
+  }
+
   return (
     <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
       <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
@@ -44,7 +55,7 @@ export function AlbumStickerGrid({ stickers, userStickers }: AlbumStickerGridPro
         <div className="inline-flex rounded-2xl border border-slate-200 bg-slate-50 p-1">
           <button
             type="button"
-            onClick={() => setViewMode('all')}
+            onClick={() => handleViewModeChange('all')}
             className={`rounded-xl px-4 py-2 text-sm font-semibold transition ${
               viewMode === 'all'
                 ? 'bg-white text-slate-900 shadow-sm'
@@ -55,7 +66,7 @@ export function AlbumStickerGrid({ stickers, userStickers }: AlbumStickerGridPro
           </button>
           <button
             type="button"
-            onClick={() => setViewMode('missing')}
+            onClick={() => handleViewModeChange('missing')}
             className={`rounded-xl px-4 py-2 text-sm font-semibold transition ${
               viewMode === 'missing'
                 ? 'bg-amber-100 text-amber-900 shadow-sm'
@@ -86,8 +97,38 @@ export function AlbumStickerGrid({ stickers, userStickers }: AlbumStickerGridPro
         </div>
       </div>
 
+      {totalPages > 1 && (
+        <div className="mt-5 flex items-center justify-between rounded-2xl border border-slate-200 bg-slate-50 px-4 py-2">
+          <p className="text-xs text-slate-500">
+            Mostrando {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, gridStats.visibleStickers.length)} de{' '}
+            {gridStats.visibleStickers.length}
+          </p>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setPage((p) => Math.max(0, p - 1))}
+              disabled={page === 0}
+              className="rounded-lg border border-slate-300 bg-white px-3 py-1 text-xs font-semibold text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              ← Anterior
+            </button>
+            <span className="text-xs text-slate-500">
+              {page + 1} / {totalPages}
+            </span>
+            <button
+              type="button"
+              onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
+              disabled={page >= totalPages - 1}
+              className="rounded-lg border border-slate-300 bg-white px-3 py-1 text-xs font-semibold text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Siguiente →
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="mt-5 grid grid-cols-3 gap-2 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 xl:grid-cols-10">
-        {gridStats.visibleStickers.map((sticker) => {
+        {paginatedStickers.map((sticker) => {
           const userSticker = userStickers.get(sticker.id)
           const owned = (userSticker?.quantity_owned || 0) > 0
           const missing = !!userSticker && (userSticker.quantity_owned || 0) === 0
@@ -155,9 +196,11 @@ export function AlbumStickerGrid({ stickers, userStickers }: AlbumStickerGridPro
         })}
       </div>
 
-      {gridStats.visibleStickers.length === 0 ? (
+      {paginatedStickers.length === 0 ? (
         <p className="mt-5 rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">
-          No hay figuritas faltantes visibles con este filtro.
+          {viewMode === 'missing'
+            ? 'No hay figuritas faltantes escaneadas para este álbum.'
+            : 'No hay figuritas en este álbum.'}
         </p>
       ) : null}
     </section>
