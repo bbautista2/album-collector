@@ -529,26 +529,31 @@ export function AlbumPage() {
         setScanRawText(null)
       }
 
-      // Build preview candidates from the mode-specific response contract
-      if (scanMode === 'missing' && response.missingByPrefix && response.missingByPrefix.length > 0) {
+      // Build preview candidates — use the mode-specific prefixed group list
+      const groupsSource =
+        scanMode === 'missing'
+          ? response.missingByPrefix
+          : response.repeatedByPrefix
+
+      if (groupsSource && groupsSource.length > 0) {
+        // For repeated mode, preserve duplicates to reflect real count per sticker
         const candidateMap = new Map<string, ScannedStickerCandidate>()
-        response.missingByPrefix.forEach((group) => {
+
+        groupsSource.forEach((group) => {
           const prefix = group.prefix || ''
           group.numbers.forEach((num) => {
             const candidate = mapStickerCandidate(prefix, num)
-            if (!candidate) {
+            if (!candidate) return
+
+            const existing = candidateMap.get(candidate.key)
+            if (!existing) {
+              candidateMap.set(candidate.key, { ...candidate, count: 1, adjustedCount: 1 })
               return
             }
 
-            const existingCandidate = candidateMap.get(candidate.key)
-            if (!existingCandidate) {
-              candidateMap.set(candidate.key, { ...candidate, adjustedCount: candidate.count })
-              return
-            }
-
-            const nextCount = existingCandidate.count + 1
+            const nextCount = existing.count + 1
             candidateMap.set(candidate.key, {
-              ...existingCandidate,
+              ...existing,
               count: nextCount,
               adjustedCount: nextCount,
             })
@@ -568,6 +573,7 @@ export function AlbumPage() {
         return
       }
 
+      // Fallback: flat detectedNumbers (backwards compat)
       const validResults = response.detectedNumbers.filter((item) => item.count > 0)
 
       if (validResults.length === 0) {
@@ -579,11 +585,7 @@ export function AlbumPage() {
         .map((item) => {
           const candidate = mapStickerCandidate('', item.stickerNumber)
           if (!candidate) return null
-          return {
-            ...candidate,
-            count: item.count,
-            adjustedCount: item.count,
-          }
+          return { ...candidate, count: item.count, adjustedCount: item.count }
         })
         .filter((item): item is ScannedStickerCandidate => item !== null)
 
