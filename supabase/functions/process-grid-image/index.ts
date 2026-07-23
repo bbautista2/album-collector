@@ -193,10 +193,6 @@ serve(async (req: Request) => {
       return new Response(JSON.stringify({ error: 'Álbum no encontrado', debug: { errorMsg: albumError?.message, albumId } }), { status: 404, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } })
     }
 
-    if (album.created_by !== userId) {
-      return new Response(JSON.stringify({ error: 'No tienes permiso para procesar este álbum' }), { status: 403, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } })
-    }
-
     // Fetch sections for the album
     const { data: sections, error: sectionsError } = await supabaseServiceRole
       .from('album_sections')
