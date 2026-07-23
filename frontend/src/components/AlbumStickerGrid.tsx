@@ -137,35 +137,44 @@ export function AlbumStickerGrid({ stickers, userStickers }: AlbumStickerGridPro
           <div className="mt-5 grid grid-cols-3 gap-2 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 xl:grid-cols-10">
             {paginatedStickers.map((sticker) => {
               const userSticker = userStickers.get(sticker.id)
-              const owned = (userSticker?.quantity_owned || 0) > 0
-              const missing = !!userSticker && (userSticker.quantity_owned || 0) === 0
+              const repeated = (userSticker?.quantity_repeated || 0) > 0
+              const owned = !repeated && (userSticker?.quantity_owned || 0) > 0
+              const missing = !repeated && !owned && !!userSticker && (userSticker.quantity_owned || 0) === 0
 
-              const cardStyle = owned
-                ? 'border-slate-200 bg-slate-100/80 text-slate-400 opacity-80'
-                : missing
-                  ? 'border-amber-300 bg-white shadow-sm shadow-amber-100'
-                  : 'border-slate-200 bg-white text-slate-700'
+              const cardStyle = repeated
+                ? 'border-violet-200 bg-violet-50/80 text-violet-700'
+                : owned
+                  ? 'border-slate-200 bg-slate-100/80 text-slate-400 opacity-80'
+                  : missing
+                    ? 'border-amber-300 bg-white shadow-sm shadow-amber-100'
+                    : 'border-slate-200 bg-white text-slate-700'
 
-              const tagStyle = owned
-                ? 'text-slate-400'
-                : missing
-                  ? 'text-amber-500'
-                  : 'text-slate-500'
+              const tagStyle = repeated
+                ? 'text-violet-500'
+                : owned
+                  ? 'text-slate-400'
+                  : missing
+                    ? 'text-amber-500'
+                    : 'text-slate-500'
 
-              const numberStyle = owned
-                ? 'text-slate-500'
-                : missing
-                  ? 'text-slate-900'
-                  : 'text-slate-700'
+              const numberStyle = repeated
+                ? 'text-violet-900'
+                : owned
+                  ? 'text-slate-500'
+                  : missing
+                    ? 'text-slate-900'
+                    : 'text-slate-700'
 
-              const iconStyle = owned
-                ? 'bg-emerald-100 text-emerald-700'
-                : missing
-                  ? 'bg-amber-100 text-amber-700'
-                  : 'bg-slate-100 text-slate-500'
+              const iconStyle = repeated
+                ? 'bg-violet-100 text-violet-700'
+                : owned
+                  ? 'bg-emerald-100 text-emerald-700'
+                  : missing
+                    ? 'bg-amber-100 text-amber-700'
+                    : 'bg-slate-100 text-slate-500'
 
-              const icon = owned ? '✓' : missing ? '!' : '·'
-              const statusLabel = owned ? 'Obtenida' : missing ? 'Faltante' : 'Sin escanear'
+              const icon = repeated ? '↻' : owned ? '✓' : missing ? '!' : '·'
+              const statusLabel = repeated ? 'Repetida' : owned ? 'Obtenida' : missing ? 'Faltante' : 'Sin escanear'
 
               return (
                 <div
@@ -189,7 +198,7 @@ export function AlbumStickerGrid({ stickers, userStickers }: AlbumStickerGridPro
                     </div>
                   </div>
 
-                  <p className={`mt-3 truncate text-xs font-medium ${owned ? 'text-slate-500' : missing ? 'text-slate-700' : 'text-slate-600'}`}>
+                  <p className={`mt-3 truncate text-xs font-medium ${repeated ? 'text-violet-700' : owned ? 'text-slate-500' : missing ? 'text-slate-700' : 'text-slate-600'}`}>
                     {sticker.name}
                   </p>
 

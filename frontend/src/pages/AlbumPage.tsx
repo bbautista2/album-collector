@@ -455,7 +455,7 @@ export function AlbumPage() {
           const existing = userStickers.get(stickerId)
           const addCount = candidate.adjustedCount > 0 ? candidate.adjustedCount : candidate.count
           const nextRepeated = (existing?.quantity_repeated || 0) + addCount
-          const nextOwned = Math.max((existing?.quantity_owned || 0) + addCount, nextRepeated + 1)
+          const nextOwned = Math.max((existing?.quantity_owned || 0) + addCount, nextRepeated)
 
           updatesByStickerId.set(stickerId, {
             user_id: user.id,
