@@ -62,8 +62,8 @@ BEGIN
     RAISE EXCEPTION 'Not authorized';
   END IF;
 
-  SELECT TRIM(city), TRIM(country) INTO v_user_city, v_user_country
-  FROM profiles WHERE id = p_user_id;
+  SELECT TRIM(p.city), TRIM(p.country) INTO v_user_city, v_user_country
+  FROM profiles p WHERE p.id = p_user_id;
 
   IF v_user_city IS NULL OR v_user_city = '' THEN
     RETURN;
