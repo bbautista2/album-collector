@@ -778,16 +778,31 @@ export function AlbumPage() {
     }
   }
 
+  const findStickerByCode = (code: string): Sticker | undefined => {
+    const trimmed = code.trim()
+    const numberOnly = parseInt(trimmed, 10)
+    if (!isNaN(numberOnly) && numberOnly > 0) {
+      const byNumber = stickers.filter((s) => s.sticker_number === numberOnly)
+      if (byNumber.length === 1) return byNumber[0]
+    }
+    const match = trimmed.match(/^([A-Za-z]+)\s*(\d+)$/)
+    if (match) {
+      const prefix = match[1].toLowerCase()
+      const num = parseInt(match[2], 10)
+      const section = sections.find((s) => normalizePrefixToken(s.prefix) === prefix)
+      if (section) {
+        return stickers.find((s) => s.section_id === section.id && s.sticker_number === num)
+      }
+      return stickers.find((s) => s.sticker_number === num && normalizePrefixToken(s.name).startsWith(prefix))
+    }
+    return undefined
+  }
+
   const handleAddRepeated = async () => {
     if (!user || !addRepeatedNumber) return
-    const number = parseInt(addRepeatedNumber, 10)
-    if (isNaN(number) || number <= 0) {
-      setScanError('Número de figurita inválido')
-      return
-    }
-    const sticker = stickers.find((s) => s.sticker_number === number)
+    const sticker = findStickerByCode(addRepeatedNumber)
     if (!sticker) {
-      setScanError(`No se encontró la figurita #${number} en este álbum`)
+      setScanError(`No se encontró la figurita "${addRepeatedNumber}" en este álbum`)
       return
     }
     await handleUpdateRepeated(sticker.id, addRepeatedCount)
@@ -798,14 +813,9 @@ export function AlbumPage() {
 
   const handleAddMissing = async () => {
     if (!user || !addMissingNumber) return
-    const number = parseInt(addMissingNumber, 10)
-    if (isNaN(number) || number <= 0) {
-      setScanError('Número de figurita inválido')
-      return
-    }
-    const sticker = stickers.find((s) => s.sticker_number === number)
+    const sticker = findStickerByCode(addMissingNumber)
     if (!sticker) {
-      setScanError(`No se encontró la figurita #${number} en este álbum`)
+      setScanError(`No se encontró la figurita "${addMissingNumber}" en este álbum`)
       return
     }
     await handleToggleMissing(sticker.id, true)
@@ -1271,14 +1281,13 @@ export function AlbumPage() {
 
         {showAddRepeated && (
           <div className="mt-3 flex flex-wrap items-center gap-2 rounded-2xl border border-violet-200 bg-violet-50 p-3">
-            <span className="text-xs font-semibold text-violet-700">N°:</span>
+            <span className="text-xs font-semibold text-violet-700">Código:</span>
             <input
-              type="number"
-              min="1"
+              type="text"
               value={addRepeatedNumber}
               onChange={(e) => setAddRepeatedNumber(e.target.value)}
-              placeholder="Ej: 42"
-              className="w-20 rounded-lg border border-violet-300 bg-white px-2 py-1 text-xs font-semibold text-violet-900"
+              placeholder="Ej: T42"
+              className="w-24 rounded-lg border border-violet-300 bg-white px-2 py-1 text-xs font-semibold text-violet-900"
             />
             <span className="text-xs font-semibold text-violet-700">Cant:</span>
             <select
@@ -1427,14 +1436,13 @@ export function AlbumPage() {
 
         {showAddMissing && (
           <div className="mt-3 flex flex-wrap items-center gap-2 rounded-2xl border border-amber-200 bg-amber-50 p-3">
-            <span className="text-xs font-semibold text-amber-700">N°:</span>
+            <span className="text-xs font-semibold text-amber-700">Código:</span>
             <input
-              type="number"
-              min="1"
+              type="text"
               value={addMissingNumber}
               onChange={(e) => setAddMissingNumber(e.target.value)}
-              placeholder="Ej: 42"
-              className="w-20 rounded-lg border border-amber-300 bg-white px-2 py-1 text-xs font-semibold text-amber-900"
+              placeholder="Ej: T42"
+              className="w-24 rounded-lg border border-amber-300 bg-white px-2 py-1 text-xs font-semibold text-amber-900"
             />
             <button
               onClick={handleAddMissing}
