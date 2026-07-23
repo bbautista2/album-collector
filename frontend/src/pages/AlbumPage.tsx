@@ -813,6 +813,41 @@ export function AlbumPage() {
     setShowAddMissing(false)
   }
 
+  const repeatedSummary = useMemo(() => {
+    const items = stickers
+      .map((sticker) => {
+        const userSticker = userStickers.get(sticker.id)
+        const repeatedCount = userSticker?.quantity_repeated || 0
+
+        if (repeatedCount <= 0) {
+          return null
+        }
+
+        return {
+          sticker,
+          repeatedCount,
+          ownedCount: userSticker?.quantity_owned || 0,
+        }
+      })
+      .filter(
+        (
+          item
+        ): item is { sticker: Sticker; repeatedCount: number; ownedCount: number } => item !== null
+      )
+      .sort((a, b) => {
+        if (b.repeatedCount !== a.repeatedCount) {
+          return b.repeatedCount - a.repeatedCount
+        }
+        return a.sticker.sticker_number - b.sticker.sticker_number
+      })
+
+    return {
+      items,
+      totalTypes: items.length,
+      totalCopies: items.reduce((sum, item) => sum + item.repeatedCount, 0),
+    }
+  }, [stickers, userStickers])
+
   const missingStickers = useMemo(
     () =>
       stickers
@@ -873,41 +908,6 @@ export function AlbumPage() {
   const selectedCandidateCount = scanCandidates.filter((candidate) => candidate.selected).length
   const unmappedCandidateCount = scanCandidates.filter((candidate) => !candidate.mapped).length
   const stickerById = useMemo(() => new Map(stickers.map((sticker) => [sticker.id, sticker])), [stickers])
-  const repeatedSummary = useMemo(() => {
-    const items = stickers
-      .map((sticker) => {
-        const userSticker = userStickers.get(sticker.id)
-        const repeatedCount = userSticker?.quantity_repeated || 0
-
-        if (repeatedCount <= 0) {
-          return null
-        }
-
-        return {
-          sticker,
-          repeatedCount,
-          ownedCount: userSticker?.quantity_owned || 0,
-        }
-      })
-      .filter(
-        (
-          item
-        ): item is { sticker: Sticker; repeatedCount: number; ownedCount: number } => item !== null
-      )
-      .sort((a, b) => {
-        if (b.repeatedCount !== a.repeatedCount) {
-          return b.repeatedCount - a.repeatedCount
-        }
-        return a.sticker.sticker_number - b.sticker.sticker_number
-      })
-
-    return {
-      items,
-      totalTypes: items.length,
-      totalCopies: items.reduce((sum, item) => sum + item.repeatedCount, 0),
-    }
-  }, [stickers, userStickers])
-
   const missingSyncSummary = useMemo(() => {
     if (scanMode !== 'missing') {
       return null
