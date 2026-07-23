@@ -662,6 +662,149 @@ export function AlbumPage() {
     }
   }
 
+  const [manualActionLoading, setManualActionLoading] = useState<string | null>(null)
+  const [showAddRepeated, setShowAddRepeated] = useState(false)
+  const [addRepeatedNumber, setAddRepeatedNumber] = useState('')
+  const [addRepeatedCount, setAddRepeatedCount] = useState(1)
+  const [showAddMissing, setShowAddMissing] = useState(false)
+  const [addMissingNumber, setAddMissingNumber] = useState('')
+
+  const handleUpdateRepeated = async (stickerId: string, delta: number) => {
+    if (!user) return
+    setManualActionLoading(`repeated:${stickerId}`)
+    try {
+      const existing = userStickers.get(stickerId)
+      const nextRepeated = Math.max(0, (existing?.quantity_repeated || 0) + delta)
+      const nextOwned = Math.max(existing?.quantity_owned || 0, nextRepeated)
+
+      if (nextRepeated === 0 && nextOwned === 0) {
+        await supabase.from('user_stickers').delete().eq('user_id', user.id).eq('sticker_id', stickerId)
+        const updated = new Map(userStickers)
+        updated.delete(stickerId)
+        setUserStickers(updated)
+        return
+      }
+
+      const { error } = await supabase.from('user_stickers').upsert(
+        { user_id: user.id, sticker_id: stickerId, quantity_owned: nextOwned, quantity_repeated: nextRepeated },
+        { onConflict: 'user_id,sticker_id' }
+      )
+      if (error) throw error
+
+      const updated = new Map(userStickers)
+      updated.set(stickerId, {
+        id: existing?.id || '',
+        user_id: user.id,
+        sticker_id: stickerId,
+        quantity_owned: nextOwned,
+        quantity_repeated: nextRepeated,
+        updated_at: new Date().toISOString(),
+      })
+      setUserStickers(updated)
+    } catch (error) {
+      setScanError(error instanceof Error ? error.message : 'Error al actualizar repetida')
+    } finally {
+      setManualActionLoading(null)
+    }
+  }
+
+  const handleDeleteUserSticker = async (stickerId: string) => {
+    if (!user) return
+    setManualActionLoading(`delete:${stickerId}`)
+    try {
+      const { error } = await supabase.from('user_stickers').delete().eq('user_id', user.id).eq('sticker_id', stickerId)
+      if (error) throw error
+      const updated = new Map(userStickers)
+      updated.delete(stickerId)
+      setUserStickers(updated)
+    } catch (error) {
+      setScanError(error instanceof Error ? error.message : 'Error al eliminar')
+    } finally {
+      setManualActionLoading(null)
+    }
+  }
+
+  const handleToggleMissing = async (stickerId: string, markMissing: boolean) => {
+    if (!user) return
+    setManualActionLoading(`missing:${stickerId}`)
+    try {
+      if (markMissing) {
+        const { error } = await supabase.from('user_stickers').upsert(
+          { user_id: user.id, sticker_id: stickerId, quantity_owned: 0, quantity_repeated: 0 },
+          { onConflict: 'user_id,sticker_id' }
+        )
+        if (error) throw error
+        const updated = new Map(userStickers)
+        updated.set(stickerId, {
+          id: '',
+          user_id: user.id,
+          sticker_id: stickerId,
+          quantity_owned: 0,
+          quantity_repeated: 0,
+          updated_at: new Date().toISOString(),
+        })
+        setUserStickers(updated)
+      } else {
+        await supabase.from('user_stickers').delete().eq('user_id', user.id).eq('sticker_id', stickerId)
+        const updated = new Map(userStickers)
+        updated.delete(stickerId)
+        setUserStickers(updated)
+      }
+    } catch (error) {
+      setScanError(error instanceof Error ? error.message : 'Error al cambiar estado')
+    } finally {
+      setManualActionLoading(null)
+    }
+  }
+
+  const handleAddRepeated = async () => {
+    if (!user || !addRepeatedNumber) return
+    const number = parseInt(addRepeatedNumber, 10)
+    if (isNaN(number) || number <= 0) {
+      setScanError('Número de figurita inválido')
+      return
+    }
+    const sticker = stickers.find((s) => s.sticker_number === number)
+    if (!sticker) {
+      setScanError(`No se encontró la figurita #${number} en este álbum`)
+      return
+    }
+    await handleUpdateRepeated(sticker.id, addRepeatedCount)
+    setAddRepeatedNumber('')
+    setAddRepeatedCount(1)
+    setShowAddRepeated(false)
+  }
+
+  const handleAddMissing = async () => {
+    if (!user || !addMissingNumber) return
+    const number = parseInt(addMissingNumber, 10)
+    if (isNaN(number) || number <= 0) {
+      setScanError('Número de figurita inválido')
+      return
+    }
+    const sticker = stickers.find((s) => s.sticker_number === number)
+    if (!sticker) {
+      setScanError(`No se encontró la figurita #${number} en este álbum`)
+      return
+    }
+    await handleToggleMissing(sticker.id, true)
+    setAddMissingNumber('')
+    setShowAddMissing(false)
+  }
+
+  const missingStickers = useMemo(
+    () =>
+      stickers
+        .map((sticker) => {
+          const us = userStickers.get(sticker.id)
+          if (!us || (us.quantity_owned || 0) > 0) return null
+          return { sticker, repeatedCount: us.quantity_repeated || 0 }
+        })
+        .filter((item): item is { sticker: Sticker; repeatedCount: number } => item !== null)
+        .sort((a, b) => a.sticker.sticker_number - b.sticker.sticker_number),
+    [stickers, userStickers]
+  )
+
   const ownedCount = useMemo(
     () => Array.from(userStickers.values()).filter((us) => us.quantity_owned > 0).length,
     [userStickers]
@@ -998,28 +1141,189 @@ export function AlbumPage() {
           </div>
         </div>
 
+        <div className="mt-4 flex items-center gap-2">
+          <button
+            onClick={() => { setShowAddRepeated(true); setShowAddMissing(false) }}
+            className="rounded-xl bg-violet-600 px-4 py-2 text-xs font-semibold text-white transition hover:bg-violet-700"
+          >
+            + Agregar repetida
+          </button>
+        </div>
+
+        {showAddRepeated && (
+          <div className="mt-3 flex flex-wrap items-center gap-2 rounded-2xl border border-violet-200 bg-violet-50 p-3">
+            <span className="text-xs font-semibold text-violet-700">N°:</span>
+            <input
+              type="number"
+              min="1"
+              value={addRepeatedNumber}
+              onChange={(e) => setAddRepeatedNumber(e.target.value)}
+              placeholder="Ej: 42"
+              className="w-20 rounded-lg border border-violet-300 bg-white px-2 py-1 text-xs font-semibold text-violet-900"
+            />
+            <span className="text-xs font-semibold text-violet-700">Cant:</span>
+            <select
+              value={addRepeatedCount}
+              onChange={(e) => setAddRepeatedCount(Number(e.target.value))}
+              className="rounded-lg border border-violet-300 bg-white px-2 py-1 text-xs font-semibold text-violet-900"
+            >
+              {Array.from({ length: 20 }, (_, i) => i + 1).map((n) => (
+                <option key={n} value={n}>{n}</option>
+              ))}
+            </select>
+            <button
+              onClick={handleAddRepeated}
+              disabled={!addRepeatedNumber}
+              className="rounded-lg bg-violet-600 px-3 py-1 text-xs font-semibold text-white hover:bg-violet-700 disabled:opacity-50"
+            >
+              Guardar
+            </button>
+            <button
+              onClick={() => setShowAddRepeated(false)}
+              className="rounded-lg border border-violet-300 bg-white px-3 py-1 text-xs font-semibold text-violet-700 hover:bg-violet-100"
+            >
+              Cancelar
+            </button>
+          </div>
+        )}
+
         {repeatedSummary.items.length === 0 ? (
           <div className="mt-4 rounded-2xl border border-dashed border-violet-200 bg-violet-50/40 p-4 text-sm text-violet-700">
             Aún no tienes repetidas guardadas. Escanea en modo <strong>Ver repetidas</strong> y confirma para verlas aquí.
           </div>
         ) : (
           <div className="mt-5 grid grid-cols-2 gap-2 md:grid-cols-3 lg:grid-cols-5 xl:grid-cols-6">
-            {repeatedSummary.items.map(({ sticker, repeatedCount, ownedCount }) => (
-              <div
-                key={sticker.id}
-                className="rounded-2xl border border-violet-200 bg-violet-50 p-3"
-              >
-                <p className="text-[11px] font-semibold uppercase tracking-wide text-violet-500">Repetida</p>
-                <p className="mt-1 text-xl font-black text-violet-900">#{sticker.sticker_number}</p>
-                <p className="truncate text-xs text-violet-700">{sticker.name}</p>
-                <div className="mt-2 flex items-center justify-between text-[11px]">
-                  <span className="rounded-full bg-violet-100 px-2 py-0.5 font-semibold text-violet-700">
-                    x{repeatedCount}
-                  </span>
-                  <span className="text-violet-600">Total: {ownedCount}</span>
+            {repeatedSummary.items.map(({ sticker, repeatedCount, ownedCount }) => {
+              const isLoading = manualActionLoading === `repeated:${sticker.id}` || manualActionLoading === `delete:${sticker.id}`
+              return (
+                <div
+                  key={sticker.id}
+                  className="relative rounded-2xl border border-violet-200 bg-violet-50 p-3"
+                >
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-violet-500">Repetida</p>
+                  <p className="mt-1 text-xl font-black text-violet-900">#{sticker.sticker_number}</p>
+                  <p className="truncate text-xs text-violet-700">{sticker.name}</p>
+
+                  <div className="mt-2 flex items-center gap-1">
+                    <button
+                      onClick={() => handleUpdateRepeated(sticker.id, -1)}
+                      disabled={isLoading || repeatedCount <= 0}
+                      className="flex h-6 w-6 items-center justify-center rounded-full bg-violet-200 text-xs font-bold text-violet-800 transition hover:bg-violet-300 disabled:opacity-30"
+                    >
+                      −
+                    </button>
+                    <span className="min-w-[2rem] text-center text-sm font-bold text-violet-900">
+                      {isLoading ? '...' : repeatedCount}
+                    </span>
+                    <button
+                      onClick={() => handleUpdateRepeated(sticker.id, 1)}
+                      disabled={isLoading}
+                      className="flex h-6 w-6 items-center justify-center rounded-full bg-violet-200 text-xs font-bold text-violet-800 transition hover:bg-violet-300 disabled:opacity-30"
+                    >
+                      +
+                    </button>
+                    <span className="ml-2 text-[10px] text-violet-500">
+                      {ownedCount} total
+                    </span>
+                  </div>
+
+                  <button
+                    onClick={() => handleDeleteUserSticker(sticker.id)}
+                    disabled={isLoading}
+                    className="mt-2 w-full rounded-lg border border-violet-200 bg-white py-1 text-[11px] font-semibold text-violet-600 transition hover:bg-red-50 hover:text-red-600"
+                  >
+                    {manualActionLoading === `delete:${sticker.id}` ? '...' : 'Eliminar'}
+                  </button>
                 </div>
-              </div>
-            ))}
+              )
+            })}
+          </div>
+        )}
+      </div>
+
+      <div className="rounded-3xl border border-amber-200 bg-white p-5 shadow-sm">
+        <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-amber-400">Inventario de faltantes</p>
+            <h2 className="mt-1 text-2xl font-bold text-slate-900">Mis faltantes</h2>
+            <p className="mt-2 text-sm text-slate-600">
+              Aquí ves todas las figuritas que te faltan de este álbum.
+            </p>
+          </div>
+
+          <div className="rounded-2xl bg-amber-50 px-4 py-3">
+            <p className="text-xs uppercase tracking-wide text-amber-500">Faltantes</p>
+            <p className="mt-1 text-2xl font-bold text-amber-700">{missingStickers.length}</p>
+          </div>
+        </div>
+
+        <div className="mt-4 flex items-center gap-2">
+          <button
+            onClick={() => { setShowAddMissing(true); setShowAddRepeated(false) }}
+            className="rounded-xl bg-amber-600 px-4 py-2 text-xs font-semibold text-white transition hover:bg-amber-700"
+          >
+            + Agregar faltante
+          </button>
+        </div>
+
+        {showAddMissing && (
+          <div className="mt-3 flex flex-wrap items-center gap-2 rounded-2xl border border-amber-200 bg-amber-50 p-3">
+            <span className="text-xs font-semibold text-amber-700">N°:</span>
+            <input
+              type="number"
+              min="1"
+              value={addMissingNumber}
+              onChange={(e) => setAddMissingNumber(e.target.value)}
+              placeholder="Ej: 42"
+              className="w-20 rounded-lg border border-amber-300 bg-white px-2 py-1 text-xs font-semibold text-amber-900"
+            />
+            <button
+              onClick={handleAddMissing}
+              disabled={!addMissingNumber}
+              className="rounded-lg bg-amber-600 px-3 py-1 text-xs font-semibold text-white hover:bg-amber-700 disabled:opacity-50"
+            >
+              Guardar
+            </button>
+            <button
+              onClick={() => setShowAddMissing(false)}
+              className="rounded-lg border border-amber-300 bg-white px-3 py-1 text-xs font-semibold text-amber-700 hover:bg-amber-100"
+            >
+              Cancelar
+            </button>
+          </div>
+        )}
+
+        {missingStickers.length === 0 ? (
+          <div className="mt-4 rounded-2xl border border-dashed border-amber-200 bg-amber-50/40 p-4 text-sm text-amber-700">
+            No tienes faltantes registradas. Escanea en modo <strong>Ver faltantes</strong> o agrégalas manualmente.
+          </div>
+        ) : (
+          <div className="mt-5 grid grid-cols-2 gap-2 md:grid-cols-3 lg:grid-cols-5 xl:grid-cols-6">
+            {missingStickers.map(({ sticker, repeatedCount }) => {
+              const isLoading = manualActionLoading === `missing:${sticker.id}`
+              return (
+                <div
+                  key={sticker.id}
+                  className="relative rounded-2xl border border-amber-200 bg-amber-50 p-3"
+                >
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-amber-500">Faltante</p>
+                  <p className="mt-1 text-xl font-black text-amber-900">#{sticker.sticker_number}</p>
+                  <p className="truncate text-xs text-amber-700">{sticker.name}</p>
+                  {repeatedCount > 0 && (
+                    <p className="mt-1 text-[10px] text-amber-600">
+                      {repeatedCount} repetida{repeatedCount !== 1 ? 's' : ''}
+                    </p>
+                  )}
+                  <button
+                    onClick={() => handleToggleMissing(sticker.id, false)}
+                    disabled={isLoading}
+                    className="mt-2 w-full rounded-lg border border-amber-200 bg-white py-1 text-[11px] font-semibold text-amber-600 transition hover:bg-emerald-50 hover:text-emerald-600"
+                  >
+                    {isLoading ? '...' : 'Marcar como obtenida'}
+                  </button>
+                </div>
+              )
+            })}
           </div>
         )}
       </div>
