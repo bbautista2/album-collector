@@ -120,6 +120,24 @@ export interface AlbumSection {
   total_stickers: number;
 }
 
+export interface ExchangeNotification {
+  id: string;
+  from_user_id: string;
+  to_user_id: string;
+  album_id: string;
+  sticker_id: string;
+  status: 'pending' | 'accepted' | 'rejected' | 'cancelled';
+  created_at: string;
+  read_at: string | null;
+}
+
+export interface ExchangePartner {
+  user_id: string;
+  username: string;
+  city: string;
+  repeated_count: number;
+}
+
 export interface ExchangeCommitment {
   id: string;
   created_by: string;

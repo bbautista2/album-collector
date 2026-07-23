@@ -1,9 +1,52 @@
+import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
+import { supabase } from '../lib/supabase'
 import { useAuthStore } from '../stores/authStore'
 
 export function Navbar() {
   const { user, logout } = useAuthStore()
   const navigate = useNavigate()
+  const [unreadCount, setUnreadCount] = useState(0)
+
+  useEffect(() => {
+    if (!user) {
+      setUnreadCount(0)
+      return
+    }
+
+    const fetchUnread = async () => {
+      const { count } = await supabase
+        .from('exchange_notifications')
+        .select('*', { count: 'exact', head: true })
+        .eq('to_user_id', user.id)
+        .eq('status', 'pending')
+        .is('read_at', null)
+
+      setUnreadCount(count || 0)
+    }
+
+    fetchUnread()
+
+    const channel = supabase
+      .channel('exchange-notifications')
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'exchange_notifications',
+          filter: `to_user_id=eq.${user.id}`,
+        },
+        () => {
+          setUnreadCount((prev) => prev + 1)
+        }
+      )
+      .subscribe()
+
+    return () => {
+      supabase.removeChannel(channel)
+    }
+  }, [user])
 
   const handleLogout = async () => {
     try {
@@ -33,6 +76,17 @@ export function Navbar() {
                   className="text-gray-700 hover:text-primary-600 px-3 py-2 rounded-md text-sm font-medium"
                 >
                   Dashboard
+                </Link>
+                <Link
+                  to="/buzon"
+                  className="relative text-gray-700 hover:text-primary-600 px-3 py-2 rounded-md text-sm font-medium"
+                >
+                  Buzón
+                  {unreadCount > 0 && (
+                    <span className="absolute -right-1 -top-1 flex h-5 w-5 items-center justify-center rounded-full bg-red-500 text-[10px] font-bold text-white">
+                      {unreadCount > 9 ? '9+' : unreadCount}
+                    </span>
+                  )}
                 </Link>
                 <Link
                   to="/profile"

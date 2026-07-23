@@ -4,7 +4,7 @@ import { useAuthStore } from '../stores/authStore'
 import { supabase } from '../lib/supabase'
 import { scanRepeatedStickers } from '../lib/repeatedScanner'
 import { AlbumStickerGrid } from '../components/AlbumStickerGrid'
-import type { Album, ExchangeCommitment, Sticker, UserSticker } from '../types'
+import type { Album, ExchangeCommitment, ExchangePartner, Sticker, UserSticker } from '../types'
 
 type ScanMode = 'repeated' | 'missing'
 
@@ -813,6 +813,63 @@ export function AlbumPage() {
     setShowAddMissing(false)
   }
 
+  const [exchangePartners, setExchangePartners] = useState<Map<string, ExchangePartner[]>>(new Map())
+  const [exchangePartnerLoading, setExchangePartnerLoading] = useState<string | null>(null)
+  const [sendingRequest, setSendingRequest] = useState<string | null>(null)
+
+  const handleFindPartners = async (stickerId: string) => {
+    if (!user || !albumId) return
+    const loadingKey = `partners:${stickerId}`
+    setExchangePartnerLoading(loadingKey)
+    try {
+      const { data, error } = await supabase.rpc('find_exchange_partners', {
+        p_user_id: user.id,
+        p_album_id: albumId,
+        p_sticker_id: stickerId,
+      })
+      if (error) throw error
+      const partners = (data || []) as ExchangePartner[]
+      setExchangePartners((prev) => {
+        const next = new Map(prev)
+        next.set(stickerId, partners)
+        return next
+      })
+    } catch {
+      setExchangePartners((prev) => {
+        const next = new Map(prev)
+        next.set(stickerId, [])
+        return next
+      })
+    } finally {
+      setExchangePartnerLoading(null)
+    }
+  }
+
+  const handleSendExchangeRequest = async (toUserId: string, stickerId: string) => {
+    if (!user || !albumId) return
+    const key = `${toUserId}:${stickerId}`
+    setSendingRequest(key)
+    try {
+      const { error } = await supabase.from('exchange_notifications').insert({
+        from_user_id: user.id,
+        to_user_id: toUserId,
+        album_id: albumId,
+        sticker_id: stickerId,
+        status: 'pending',
+      })
+      if (error) throw error
+      setExchangePartners((prev) => {
+        const next = new Map(prev)
+        next.delete(stickerId)
+        return next
+      })
+    } catch {
+      // silent
+    } finally {
+      setSendingRequest(null)
+    }
+  }
+
   const repeatedSummary = useMemo(() => {
     const items = stickers
       .map((sticker) => {
@@ -1409,6 +1466,8 @@ export function AlbumPage() {
               <div className="mt-5 grid grid-cols-2 gap-2 md:grid-cols-3 lg:grid-cols-5 xl:grid-cols-6">
                 {paginatedMissing.map(({ sticker, repeatedCount }) => {
                   const isLoading = manualActionLoading === `missing:${sticker.id}`
+                  const partners = exchangePartners.get(sticker.id)
+                  const isPartnersLoading = exchangePartnerLoading === `partners:${sticker.id}`
                   return (
                     <div
                       key={sticker.id}
@@ -1422,13 +1481,58 @@ export function AlbumPage() {
                           {repeatedCount} repetida{repeatedCount !== 1 ? 's' : ''}
                         </p>
                       )}
-                      <button
-                        onClick={() => handleToggleMissing(sticker.id, false)}
-                        disabled={isLoading}
-                        className="mt-2 w-full rounded-lg border border-amber-200 bg-white py-1 text-[11px] font-semibold text-amber-600 transition hover:bg-emerald-50 hover:text-emerald-600"
-                      >
-                        {isLoading ? '...' : 'Marcar como obtenida'}
-                      </button>
+                      <div className="mt-2 flex flex-col gap-1.5">
+                        <button
+                          onClick={() => handleToggleMissing(sticker.id, false)}
+                          disabled={isLoading}
+                          className="w-full rounded-lg border border-amber-200 bg-white py-1 text-[11px] font-semibold text-amber-600 transition hover:bg-emerald-50 hover:text-emerald-600"
+                        >
+                          {isLoading ? '...' : 'Marcar como obtenida'}
+                        </button>
+                        <button
+                          onClick={() => handleFindPartners(sticker.id)}
+                          disabled={isPartnersLoading}
+                          className="w-full rounded-lg bg-blue-600 py-1 text-[11px] font-semibold text-white transition hover:bg-blue-700 disabled:opacity-50"
+                        >
+                          {isPartnersLoading ? 'Buscando...' : 'Buscar intercambio'}
+                        </button>
+                      </div>
+
+                      {partners && (
+                        <div className="absolute left-0 right-0 top-full z-10 mt-1 rounded-xl border border-blue-200 bg-white p-2 shadow-lg">
+                          <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-blue-600">
+                            {partners.length > 0
+                              ? `En tu ciudad (${partners.length})`
+                              : 'Sin resultados en tu ciudad'}
+                          </p>
+                          {partners.length > 0 && (
+                            <div className="max-h-40 space-y-1 overflow-y-auto">
+                              {partners.map((partner) => {
+                                const requestKey = `${partner.user_id}:${sticker.id}`
+                                const isSending = sendingRequest === requestKey
+                                return (
+                                  <div
+                                    key={partner.user_id}
+                                    className="flex items-center justify-between rounded-lg border border-slate-100 bg-slate-50 px-2 py-1.5"
+                                  >
+                                    <div>
+                                      <p className="text-xs font-semibold text-slate-800">{partner.username}</p>
+                                      <p className="text-[10px] text-slate-500">{partner.city} · x{partner.repeated_count}</p>
+                                    </div>
+                                    <button
+                                      onClick={() => handleSendExchangeRequest(partner.user_id, sticker.id)}
+                                      disabled={isSending}
+                                      className="rounded-md bg-blue-600 px-2 py-1 text-[10px] font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+                                    >
+                                      {isSending ? '...' : 'Solicitar'}
+                                    </button>
+                                  </div>
+                                )
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
                   )
                 })}

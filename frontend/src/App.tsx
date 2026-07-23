@@ -25,6 +25,9 @@ const ChangePasswordPage = lazy(() =>
 const ResetPasswordConfirmPage = lazy(() =>
   import('./pages/ResetPasswordConfirmPage').then((module) => ({ default: module.ResetPasswordConfirmPage }))
 )
+const ExchangeInboxPage = lazy(() =>
+  import('./pages/ExchangeInboxPage').then((module) => ({ default: module.ExchangeInboxPage }))
+)
 
 function PageFallback() {
   return (
@@ -118,6 +121,15 @@ function App() {
 
           <Route path="/reset-password" element={<Layout><ResetPasswordRequestPage /></Layout>} />
           <Route path="/reset-password/confirm" element={<Layout><ResetPasswordConfirmPage /></Layout>} />
+
+          <Route
+            path="/buzon"
+            element={
+              <ProtectedRoute>
+                <ExchangeInboxPage />
+              </ProtectedRoute>
+            }
+          />
 
           <Route
             path="/grupos"
