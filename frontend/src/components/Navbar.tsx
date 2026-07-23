@@ -14,37 +14,47 @@ export function Navbar() {
       return
     }
 
-    const fetchUnread = async () => {
-      const { count } = await supabase
+    let cancelled = false
+    let channel: ReturnType<typeof supabase.channel> | null = null
+
+    const init = async () => {
+      const { count, error } = await supabase
         .from('exchange_notifications')
         .select('*', { count: 'exact', head: true })
         .eq('to_user_id', user.id)
         .eq('status', 'pending')
         .is('read_at', null)
 
-      setUnreadCount(count || 0)
+      if (!cancelled) {
+        setUnreadCount(error ? 0 : (count || 0))
+      }
+
+      if (!error) {
+        channel = supabase
+          .channel('exchange-notifications')
+          .on(
+            'postgres_changes',
+            {
+              event: 'INSERT',
+              schema: 'public',
+              table: 'exchange_notifications',
+              filter: `to_user_id=eq.${user.id}`,
+            },
+            () => {
+              setUnreadCount((prev) => prev + 1)
+            }
+          )
+          .subscribe()
+      }
     }
 
-    fetchUnread()
-
-    const channel = supabase
-      .channel('exchange-notifications')
-      .on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'exchange_notifications',
-          filter: `to_user_id=eq.${user.id}`,
-        },
-        () => {
-          setUnreadCount((prev) => prev + 1)
-        }
-      )
-      .subscribe()
+    init()
 
     return () => {
-      supabase.removeChannel(channel)
+      cancelled = true
+      if (channel) {
+        supabase.removeChannel(channel)
+      }
     }
   }, [user])
 
