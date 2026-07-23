@@ -56,15 +56,15 @@ SET search_path = public
 AS $$
 DECLARE
   v_user_city VARCHAR(100);
+  v_user_country VARCHAR(100);
 BEGIN
   IF auth.uid() != p_user_id THEN
     RAISE EXCEPTION 'Not authorized';
   END IF;
 
-  -- Obtener la ciudad del usuario actual
-  SELECT city INTO v_user_city FROM profiles WHERE id = p_user_id;
+  SELECT TRIM(city), TRIM(country) INTO v_user_city, v_user_country
+  FROM profiles WHERE id = p_user_id;
 
-  -- Si el usuario no tiene ciudad, devolver vacío
   IF v_user_city IS NULL OR v_user_city = '' THEN
     RETURN;
   END IF;
@@ -79,7 +79,8 @@ BEGIN
   JOIN user_albums ua ON ua.user_id = p.id AND ua.album_id = p_album_id
   JOIN user_stickers us ON us.user_id = p.id AND us.sticker_id = p_sticker_id AND us.quantity_repeated > 0
   WHERE p.id != p_user_id
-    AND LOWER(p.city) = LOWER(v_user_city)
+    AND LOWER(TRIM(p.city)) = LOWER(v_user_city)
+    AND (v_user_country IS NULL OR v_user_country = '' OR LOWER(TRIM(p.country)) = LOWER(v_user_country))
     AND NOT EXISTS (
       SELECT 1 FROM exchange_notifications en
       WHERE en.from_user_id = p_user_id

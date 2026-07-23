@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuthStore } from '../stores/authStore'
 import { supabase } from '../lib/supabase'
+import { countries, citiesByCountry } from '../data/cities'
 import type { Profile } from '../types'
 
 export function ProfilePage() {
@@ -17,6 +18,12 @@ export function ProfilePage() {
     country: '',
     is_public: false,
   })
+  const [countryCca2, setCountryCca2] = useState('')
+
+  const availableCities = useMemo(
+    () => citiesByCountry[countryCca2] || [],
+    [countryCca2],
+  )
 
   useEffect(() => {
     if (!user) {
@@ -33,11 +40,19 @@ export function ProfilePage() {
 
         if (data) {
           setProfile(data)
+
+          const storedCountry = (data.country || '').trim()
+          const foundCountry = countries.find(
+            (c) => c.name.toLowerCase() === storedCountry.toLowerCase(),
+          )
+          const cca2 = foundCountry?.cca2 || ''
+
+          setCountryCca2(cca2)
           setFormData({
             username: data.username,
             full_name: data.full_name || '',
             city: data.city || '',
-            country: data.country || '',
+            country: storedCountry,
             is_public: data.is_public,
           })
         }
@@ -51,6 +66,16 @@ export function ProfilePage() {
     fetchProfile()
   }, [user, navigate])
 
+  const handleCountryChange = (cca2: string) => {
+    setCountryCca2(cca2)
+    const countryName = countries.find((c) => c.cca2 === cca2)?.name || ''
+    setFormData((prev) => ({
+      ...prev,
+      country: countryName,
+      city: '',
+    }))
+  }
+
   const handleSave = async () => {
     if (!user) return
 
@@ -60,8 +85,8 @@ export function ProfilePage() {
         .from('profiles')
         .update({
           full_name: formData.full_name,
-          city: formData.city,
-          country: formData.country,
+          city: formData.city.trim(),
+          country: formData.country.trim(),
           is_public: formData.is_public,
         })
         .eq('id', user.id)
@@ -159,22 +184,37 @@ export function ProfilePage() {
 
               <div className="grid md:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Ciudad</label>
-                  <input
-                    type="text"
-                    value={formData.city}
-                    onChange={(e) => setFormData({ ...formData, city: e.target.value })}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 outline-none"
-                  />
+                  <label className="block text-sm font-medium text-gray-700 mb-1">País</label>
+                  <select
+                    value={countryCca2}
+                    onChange={(e) => handleCountryChange(e.target.value)}
+                    className="w-full rounded-lg border border-gray-300 px-4 py-2 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-200"
+                  >
+                    <option value="">Seleccionar país</option>
+                    {countries.map((c) => (
+                      <option key={c.cca2} value={c.cca2}>
+                        {c.name}
+                      </option>
+                    ))}
+                  </select>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">País</label>
-                  <input
-                    type="text"
-                    value={formData.country}
-                    onChange={(e) => setFormData({ ...formData, country: e.target.value })}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 outline-none"
-                  />
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Ciudad</label>
+                  <select
+                    value={formData.city}
+                    onChange={(e) => setFormData({ ...formData, city: e.target.value })}
+                    disabled={!countryCca2}
+                    className="w-full rounded-lg border border-gray-300 px-4 py-2 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-200 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <option value="">
+                      {countryCca2 ? 'Seleccionar ciudad' : 'Primero selecciona un país'}
+                    </option>
+                    {availableCities.map((city) => (
+                      <option key={city} value={city}>
+                        {city}
+                      </option>
+                    ))}
+                  </select>
                 </div>
               </div>
 

@@ -848,7 +848,8 @@ export function AlbumPage() {
         next.set(stickerId, partners)
         return next
       })
-    } catch {
+    } catch (err) {
+      console.error('Error finding exchange partners:', err)
       setExchangePartners((prev) => {
         const next = new Map(prev)
         next.set(stickerId, [])
@@ -877,8 +878,8 @@ export function AlbumPage() {
         next.delete(stickerId)
         return next
       })
-    } catch {
-      // silent
+    } catch (err) {
+      console.error('Error sending exchange request:', err)
     } finally {
       setSendingRequest(null)
     }
