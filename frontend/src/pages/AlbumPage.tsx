@@ -662,12 +662,19 @@ export function AlbumPage() {
     }
   }
 
+  const MANUAL_PAGE_SIZE = 24
+
   const [manualActionLoading, setManualActionLoading] = useState<string | null>(null)
   const [showAddRepeated, setShowAddRepeated] = useState(false)
   const [addRepeatedNumber, setAddRepeatedNumber] = useState('')
   const [addRepeatedCount, setAddRepeatedCount] = useState(1)
   const [showAddMissing, setShowAddMissing] = useState(false)
   const [addMissingNumber, setAddMissingNumber] = useState('')
+
+  const [repeatedSearch, setRepeatedSearch] = useState('')
+  const [repeatedPage, setRepeatedPage] = useState(0)
+  const [missingSearch, setMissingSearch] = useState('')
+  const [missingPage, setMissingPage] = useState(0)
 
   const handleUpdateRepeated = async (stickerId: string, delta: number) => {
     if (!user) return
@@ -745,9 +752,23 @@ export function AlbumPage() {
         })
         setUserStickers(updated)
       } else {
-        await supabase.from('user_stickers').delete().eq('user_id', user.id).eq('sticker_id', stickerId)
+        const existing = userStickers.get(stickerId)
+        const nextRepeated = existing?.quantity_repeated || 0
+        const nextOwned = Math.max(1, nextRepeated)
+        const { error } = await supabase.from('user_stickers').upsert(
+          { user_id: user.id, sticker_id: stickerId, quantity_owned: nextOwned, quantity_repeated: nextRepeated },
+          { onConflict: 'user_id,sticker_id' }
+        )
+        if (error) throw error
         const updated = new Map(userStickers)
-        updated.delete(stickerId)
+        updated.set(stickerId, {
+          id: existing?.id || '',
+          user_id: user.id,
+          sticker_id: stickerId,
+          quantity_owned: nextOwned,
+          quantity_repeated: nextRepeated,
+          updated_at: new Date().toISOString(),
+        })
         setUserStickers(updated)
       }
     } catch (error) {
@@ -804,6 +825,40 @@ export function AlbumPage() {
         .sort((a, b) => a.sticker.sticker_number - b.sticker.sticker_number),
     [stickers, userStickers]
   )
+
+  const filteredRepeated = useMemo(() => {
+    if (!repeatedSearch) return repeatedSummary.items
+    const q = repeatedSearch.toLowerCase()
+    return repeatedSummary.items.filter(
+      (item) =>
+        String(item.sticker.sticker_number).includes(q) ||
+        item.sticker.name.toLowerCase().includes(q)
+    )
+  }, [repeatedSummary.items, repeatedSearch])
+
+  const paginatedRepeated = useMemo(() => {
+    const start = repeatedPage * MANUAL_PAGE_SIZE
+    return filteredRepeated.slice(start, start + MANUAL_PAGE_SIZE)
+  }, [filteredRepeated, repeatedPage])
+
+  const repeatedTotalPages = Math.max(1, Math.ceil(filteredRepeated.length / MANUAL_PAGE_SIZE))
+
+  const filteredMissing = useMemo(() => {
+    if (!missingSearch) return missingStickers
+    const q = missingSearch.toLowerCase()
+    return missingStickers.filter(
+      (item) =>
+        String(item.sticker.sticker_number).includes(q) ||
+        item.sticker.name.toLowerCase().includes(q)
+    )
+  }, [missingStickers, missingSearch])
+
+  const paginatedMissing = useMemo(() => {
+    const start = missingPage * MANUAL_PAGE_SIZE
+    return filteredMissing.slice(start, start + MANUAL_PAGE_SIZE)
+  }, [filteredMissing, missingPage])
+
+  const missingTotalPages = Math.max(1, Math.ceil(filteredMissing.length / MANUAL_PAGE_SIZE))
 
   const ownedCount = useMemo(
     () => Array.from(userStickers.values()).filter((us) => us.quantity_owned > 0).length,
@@ -1141,13 +1196,20 @@ export function AlbumPage() {
           </div>
         </div>
 
-        <div className="mt-4 flex items-center gap-2">
+        <div className="mt-4 flex flex-wrap items-center gap-2">
           <button
             onClick={() => { setShowAddRepeated(true); setShowAddMissing(false) }}
             className="rounded-xl bg-violet-600 px-4 py-2 text-xs font-semibold text-white transition hover:bg-violet-700"
           >
             + Agregar repetida
           </button>
+          <input
+            type="text"
+            value={repeatedSearch}
+            onChange={(e) => { setRepeatedSearch(e.target.value); setRepeatedPage(0) }}
+            placeholder="Buscar por N° o nombre..."
+            className="ml-auto max-w-48 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs text-slate-700 placeholder-slate-400"
+          />
         </div>
 
         {showAddRepeated && (
@@ -1192,52 +1254,85 @@ export function AlbumPage() {
             Aún no tienes repetidas guardadas. Escanea en modo <strong>Ver repetidas</strong> y confirma para verlas aquí.
           </div>
         ) : (
-          <div className="mt-5 grid grid-cols-2 gap-2 md:grid-cols-3 lg:grid-cols-5 xl:grid-cols-6">
-            {repeatedSummary.items.map(({ sticker, repeatedCount, ownedCount }) => {
-              const isLoading = manualActionLoading === `repeated:${sticker.id}` || manualActionLoading === `delete:${sticker.id}`
-              return (
-                <div
-                  key={sticker.id}
-                  className="relative rounded-2xl border border-violet-200 bg-violet-50 p-3"
-                >
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-violet-500">Repetida</p>
-                  <p className="mt-1 text-xl font-black text-violet-900">#{sticker.sticker_number}</p>
-                  <p className="truncate text-xs text-violet-700">{sticker.name}</p>
-
-                  <div className="mt-2 flex items-center gap-1">
-                    <button
-                      onClick={() => handleUpdateRepeated(sticker.id, -1)}
-                      disabled={isLoading || repeatedCount <= 0}
-                      className="flex h-6 w-6 items-center justify-center rounded-full bg-violet-200 text-xs font-bold text-violet-800 transition hover:bg-violet-300 disabled:opacity-30"
+          <>
+            {filteredRepeated.length === 0 ? (
+              <div className="mt-4 rounded-2xl border border-dashed border-violet-200 bg-violet-50/40 p-4 text-sm text-violet-700">
+                No se encontraron repetidas con ese filtro.
+              </div>
+            ) : (
+              <div className="mt-5 grid grid-cols-2 gap-2 md:grid-cols-3 lg:grid-cols-5 xl:grid-cols-6">
+                {paginatedRepeated.map(({ sticker, repeatedCount, ownedCount }) => {
+                  const isLoading = manualActionLoading === `repeated:${sticker.id}` || manualActionLoading === `delete:${sticker.id}`
+                  return (
+                    <div
+                      key={sticker.id}
+                      className="relative rounded-2xl border border-violet-200 bg-violet-50 p-3"
                     >
-                      −
-                    </button>
-                    <span className="min-w-[2rem] text-center text-sm font-bold text-violet-900">
-                      {isLoading ? '...' : repeatedCount}
-                    </span>
-                    <button
-                      onClick={() => handleUpdateRepeated(sticker.id, 1)}
-                      disabled={isLoading}
-                      className="flex h-6 w-6 items-center justify-center rounded-full bg-violet-200 text-xs font-bold text-violet-800 transition hover:bg-violet-300 disabled:opacity-30"
-                    >
-                      +
-                    </button>
-                    <span className="ml-2 text-[10px] text-violet-500">
-                      {ownedCount} total
-                    </span>
-                  </div>
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-violet-500">Repetida</p>
+                      <p className="mt-1 text-xl font-black text-violet-900">#{sticker.sticker_number}</p>
+                      <p className="truncate text-xs text-violet-700">{sticker.name}</p>
 
+                      <div className="mt-2 flex items-center gap-1">
+                        <button
+                          onClick={() => handleUpdateRepeated(sticker.id, -1)}
+                          disabled={isLoading || repeatedCount <= 0}
+                          className="flex h-6 w-6 items-center justify-center rounded-full bg-violet-200 text-xs font-bold text-violet-800 transition hover:bg-violet-300 disabled:opacity-30"
+                        >
+                          −
+                        </button>
+                        <span className="min-w-[2rem] text-center text-sm font-bold text-violet-900">
+                          {isLoading ? '...' : repeatedCount}
+                        </span>
+                        <button
+                          onClick={() => handleUpdateRepeated(sticker.id, 1)}
+                          disabled={isLoading}
+                          className="flex h-6 w-6 items-center justify-center rounded-full bg-violet-200 text-xs font-bold text-violet-800 transition hover:bg-violet-300 disabled:opacity-30"
+                        >
+                          +
+                        </button>
+                        <span className="ml-2 text-[10px] text-violet-500">
+                          {ownedCount} total
+                        </span>
+                      </div>
+
+                      <button
+                        onClick={() => handleDeleteUserSticker(sticker.id)}
+                        disabled={isLoading}
+                        className="mt-2 w-full rounded-lg border border-violet-200 bg-white py-1 text-[11px] font-semibold text-violet-600 transition hover:bg-red-50 hover:text-red-600"
+                      >
+                        {manualActionLoading === `delete:${sticker.id}` ? '...' : 'Eliminar'}
+                      </button>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+
+            {repeatedTotalPages > 1 && (
+              <div className="mt-4 flex items-center justify-between rounded-2xl border border-violet-200 bg-violet-50 px-4 py-2">
+                <p className="text-xs text-violet-500">
+                  {repeatedPage * MANUAL_PAGE_SIZE + 1}–{Math.min((repeatedPage + 1) * MANUAL_PAGE_SIZE, filteredRepeated.length)} de {filteredRepeated.length}
+                </p>
+                <div className="flex items-center gap-2">
                   <button
-                    onClick={() => handleDeleteUserSticker(sticker.id)}
-                    disabled={isLoading}
-                    className="mt-2 w-full rounded-lg border border-violet-200 bg-white py-1 text-[11px] font-semibold text-violet-600 transition hover:bg-red-50 hover:text-red-600"
+                    onClick={() => setRepeatedPage((p) => Math.max(0, p - 1))}
+                    disabled={repeatedPage === 0}
+                    className="rounded-lg border border-violet-300 bg-white px-3 py-1 text-xs font-semibold text-violet-700 transition hover:bg-violet-100 disabled:opacity-40"
                   >
-                    {manualActionLoading === `delete:${sticker.id}` ? '...' : 'Eliminar'}
+                    ←
+                  </button>
+                  <span className="text-xs text-violet-500">{repeatedPage + 1} / {repeatedTotalPages}</span>
+                  <button
+                    onClick={() => setRepeatedPage((p) => Math.min(repeatedTotalPages - 1, p + 1))}
+                    disabled={repeatedPage >= repeatedTotalPages - 1}
+                    className="rounded-lg border border-violet-300 bg-white px-3 py-1 text-xs font-semibold text-violet-700 transition hover:bg-violet-100 disabled:opacity-40"
+                  >
+                    →
                   </button>
                 </div>
-              )
-            })}
-          </div>
+              </div>
+            )}
+          </>
         )}
       </div>
 
@@ -1257,13 +1352,20 @@ export function AlbumPage() {
           </div>
         </div>
 
-        <div className="mt-4 flex items-center gap-2">
+        <div className="mt-4 flex flex-wrap items-center gap-2">
           <button
             onClick={() => { setShowAddMissing(true); setShowAddRepeated(false) }}
             className="rounded-xl bg-amber-600 px-4 py-2 text-xs font-semibold text-white transition hover:bg-amber-700"
           >
             + Agregar faltante
           </button>
+          <input
+            type="text"
+            value={missingSearch}
+            onChange={(e) => { setMissingSearch(e.target.value); setMissingPage(0) }}
+            placeholder="Buscar por N° o nombre..."
+            className="ml-auto max-w-48 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs text-slate-700 placeholder-slate-400"
+          />
         </div>
 
         {showAddMissing && (
@@ -1298,33 +1400,66 @@ export function AlbumPage() {
             No tienes faltantes registradas. Escanea en modo <strong>Ver faltantes</strong> o agrégalas manualmente.
           </div>
         ) : (
-          <div className="mt-5 grid grid-cols-2 gap-2 md:grid-cols-3 lg:grid-cols-5 xl:grid-cols-6">
-            {missingStickers.map(({ sticker, repeatedCount }) => {
-              const isLoading = manualActionLoading === `missing:${sticker.id}`
-              return (
-                <div
-                  key={sticker.id}
-                  className="relative rounded-2xl border border-amber-200 bg-amber-50 p-3"
-                >
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-amber-500">Faltante</p>
-                  <p className="mt-1 text-xl font-black text-amber-900">#{sticker.sticker_number}</p>
-                  <p className="truncate text-xs text-amber-700">{sticker.name}</p>
-                  {repeatedCount > 0 && (
-                    <p className="mt-1 text-[10px] text-amber-600">
-                      {repeatedCount} repetida{repeatedCount !== 1 ? 's' : ''}
-                    </p>
-                  )}
+          <>
+            {filteredMissing.length === 0 ? (
+              <div className="mt-4 rounded-2xl border border-dashed border-amber-200 bg-amber-50/40 p-4 text-sm text-amber-700">
+                No se encontraron faltantes con ese filtro.
+              </div>
+            ) : (
+              <div className="mt-5 grid grid-cols-2 gap-2 md:grid-cols-3 lg:grid-cols-5 xl:grid-cols-6">
+                {paginatedMissing.map(({ sticker, repeatedCount }) => {
+                  const isLoading = manualActionLoading === `missing:${sticker.id}`
+                  return (
+                    <div
+                      key={sticker.id}
+                      className="relative rounded-2xl border border-amber-200 bg-amber-50 p-3"
+                    >
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-amber-500">Faltante</p>
+                      <p className="mt-1 text-xl font-black text-amber-900">#{sticker.sticker_number}</p>
+                      <p className="truncate text-xs text-amber-700">{sticker.name}</p>
+                      {repeatedCount > 0 && (
+                        <p className="mt-1 text-[10px] text-amber-600">
+                          {repeatedCount} repetida{repeatedCount !== 1 ? 's' : ''}
+                        </p>
+                      )}
+                      <button
+                        onClick={() => handleToggleMissing(sticker.id, false)}
+                        disabled={isLoading}
+                        className="mt-2 w-full rounded-lg border border-amber-200 bg-white py-1 text-[11px] font-semibold text-amber-600 transition hover:bg-emerald-50 hover:text-emerald-600"
+                      >
+                        {isLoading ? '...' : 'Marcar como obtenida'}
+                      </button>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+
+            {missingTotalPages > 1 && (
+              <div className="mt-4 flex items-center justify-between rounded-2xl border border-amber-200 bg-amber-50 px-4 py-2">
+                <p className="text-xs text-amber-500">
+                  {missingPage * MANUAL_PAGE_SIZE + 1}–{Math.min((missingPage + 1) * MANUAL_PAGE_SIZE, filteredMissing.length)} de {filteredMissing.length}
+                </p>
+                <div className="flex items-center gap-2">
                   <button
-                    onClick={() => handleToggleMissing(sticker.id, false)}
-                    disabled={isLoading}
-                    className="mt-2 w-full rounded-lg border border-amber-200 bg-white py-1 text-[11px] font-semibold text-amber-600 transition hover:bg-emerald-50 hover:text-emerald-600"
+                    onClick={() => setMissingPage((p) => Math.max(0, p - 1))}
+                    disabled={missingPage === 0}
+                    className="rounded-lg border border-amber-300 bg-white px-3 py-1 text-xs font-semibold text-amber-700 transition hover:bg-amber-100 disabled:opacity-40"
                   >
-                    {isLoading ? '...' : 'Marcar como obtenida'}
+                    ←
+                  </button>
+                  <span className="text-xs text-amber-500">{missingPage + 1} / {missingTotalPages}</span>
+                  <button
+                    onClick={() => setMissingPage((p) => Math.min(missingTotalPages - 1, p + 1))}
+                    disabled={missingPage >= missingTotalPages - 1}
+                    className="rounded-lg border border-amber-300 bg-white px-3 py-1 text-xs font-semibold text-amber-700 transition hover:bg-amber-100 disabled:opacity-40"
+                  >
+                    →
                   </button>
                 </div>
-              )
-            })}
-          </div>
+              </div>
+            )}
+          </>
         )}
       </div>
 
