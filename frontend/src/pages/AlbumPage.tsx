@@ -780,20 +780,24 @@ export function AlbumPage() {
 
   const findStickerByCode = (code: string): Sticker | undefined => {
     const trimmed = code.trim()
-    const numberOnly = parseInt(trimmed, 10)
-    if (!isNaN(numberOnly) && numberOnly > 0) {
-      const byNumber = stickers.filter((s) => s.sticker_number === numberOnly)
-      if (byNumber.length === 1) return byNumber[0]
-    }
     const match = trimmed.match(/^([A-Za-z]+)\s*(\d+)$/)
     if (match) {
-      const prefix = match[1].toLowerCase()
+      const prefix = normalizePrefixToken(match[1])
       const num = parseInt(match[2], 10)
       const section = sections.find((s) => normalizePrefixToken(s.prefix) === prefix)
       if (section) {
         return stickers.find((s) => s.section_id === section.id && s.sticker_number === num)
       }
       return stickers.find((s) => s.sticker_number === num && normalizePrefixToken(s.name).startsWith(prefix))
+    }
+    const numberOnly = parseInt(trimmed, 10)
+    if (!isNaN(numberOnly) && numberOnly > 0) {
+      const byNumber = stickers.filter((s) => s.sticker_number === numberOnly)
+      if (byNumber.length === 1) return byNumber[0]
+      const emptyPrefixSectionIds = new Set(
+        sections.filter((s) => !s.prefix).map((s) => s.id)
+      )
+      return byNumber.find((s) => emptyPrefixSectionIds.has(s.section_id)) || byNumber[0]
     }
     return undefined
   }
